@@ -79,7 +79,7 @@ __global__ void static d_search_tri_directed(int num_v, int *ofs, int *csr, int 
     }
 }
 
-out_type SearchTriangle_Node_Iterator(int num_v, int n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirect)
+out_type SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirect)
 {
     cudaSetDevice(0);
     dim3 blockDim(128);

@@ -11,7 +11,7 @@
     }
 
 
-__global__ void edge_search_tri(int num_v, int num_e, int *ofs, int *csr, int *results)
+__global__ void edge_search_tri(int num_v, int64_t num_e, int *ofs, int *csr, int *results)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id < num_e)
@@ -47,7 +47,7 @@ __global__ void edge_search_tri(int num_v, int num_e, int *ofs, int *csr, int *r
         return;
     }
 }
-__global__ void edge_search_tri_directed(int num_v, int num_e, int *ofs, int *csr, int *results)
+__global__ void edge_search_tri_directed(int num_v, int64_t num_e, int *ofs, int *csr, int *results)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= num_e)
@@ -87,7 +87,7 @@ __global__ void edge_search_tri_directed(int num_v, int num_e, int *ofs, int *cs
     results[id] = n_tri;
 }
 
-__global__ void sum_results(int num_e, int *d_res, unsigned long long *d_sum)
+__global__ void sum_results(int64_t num_e, int *d_res, unsigned long long *d_sum)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     int tid = threadIdx.x;
@@ -108,21 +108,21 @@ __global__ void sum_results(int num_e, int *d_res, unsigned long long *d_sum)
         atomicAdd(d_sum, s_data[0]);
 }
 
-out_type SearchTriangle_Edge_Iterator(int num_v, int n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirected)
+out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirected)
 {
     cudaSetDevice(0);
     int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr;
     unsigned long long *d_sum = nullptr;
     n_edges = n_edges<<1;
-    int n_blocks = (n_edges + 127) / 128;
+    size_t s = n_edges *sizeof(int);
+    int64_t n_blocks = (n_edges + 127) / 128;
     CHECK(cudaMalloc(&d_ofs, (offsets.size()) * sizeof(int)));
-    CHECK(cudaMalloc(&d_csr, n_edges * sizeof(int)));
-    CHECK(cudaMalloc(&d_res, n_edges * sizeof(int)));
+    CHECK(cudaMalloc(&d_csr, s));
+    CHECK(cudaMalloc(&d_res, s));
     CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
-    CHECK(cudaMemcpy(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_csr, csr.data(),csr.size() * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
-
     dim3 blockDim(128);
     dim3 gridDim(n_blocks);
     if (undirected)
@@ -136,7 +136,7 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int n_edges, std::vector<int> &
     CHECK(cudaGetLastError());
     CHECK(cudaDeviceSynchronize());
 
-    int64_t tri_count = 0;
+    unsigned long long tri_count = 0;
     CHECK(cudaMemcpy(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
 
     cudaFree(d_res);
@@ -144,7 +144,7 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int n_edges, std::vector<int> &
     cudaFree(d_ofs);
     cudaFree(d_sum);
 
-    int64_t n_tri = tri_count;
+    int64_t n_tri = (int64_t)tri_count;
     if (!undirected) n_tri /= 3;
 
     return n_tri;

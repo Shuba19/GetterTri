@@ -25,10 +25,10 @@ __device__ bool bin_search(int goal, int *v, int len);
 __device__ int triangular_col_from_id(int id);
 
 
-out_type SearchTriangle_Edge_Iterator(int num_v,int n_edges, std::vector<int>& offsets, std::vector<int>& csr, bool undirect);
+out_type SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, bool undirect);
 
-out_type SearchTriangle_Node_Iterator(int num_v,int n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
+out_type SearchTriangle_Node_Iterator(int num_v,int64_t n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
 
-out_type TTC(int num_v,int n_edges, std::vector<int>offsets, std::vector<int> csr);
+out_type TTC(int num_v,int64_t n_edges, std::vector<int>offsets, std::vector<int> csr);
 
 #endif

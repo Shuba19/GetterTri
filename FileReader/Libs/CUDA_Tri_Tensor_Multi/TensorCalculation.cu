@@ -192,7 +192,7 @@ __global__ void cubeMatrix(int tpr, tiles_b *matrix, double *square, int64_t *di
     }
 }
 
-out_type TTC(int num_v, int n_edges, std::vector<int> offsets, std::vector<int> csr)
+out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr)
 {
     cudaSetDevice(0);
     int tiles_per_row = ((num_v + 15) >> 4);
@@ -205,12 +205,10 @@ out_type TTC(int num_v, int n_edges, std::vector<int> offsets, std::vector<int> 
     d_ofs = nullptr;
     CHECK(cudaMalloc(&d_csr, (padded_size_csr) * sizeof(int)));
     CHECK(cudaMalloc(&d_ofs, (num_v + 1) * sizeof(int)));
-
     int tiles_shifted = total_tiles;
     CHECK(cudaMalloc(&d_tiles, (tiles_shifted) * sizeof(tiles_b)));
     CHECK(cudaMemcpyAsync(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
-
     dim3 tb_dim_grid((total_tiles + 127) / 128);
     tiles_builder<<<tb_dim_grid, 128>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
     cudaDeviceSynchronize();
