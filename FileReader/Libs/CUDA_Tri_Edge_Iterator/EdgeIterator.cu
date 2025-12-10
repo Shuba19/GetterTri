@@ -87,26 +87,6 @@ __global__ void edge_search_tri_directed(int num_v, int64_t num_e, int *ofs, int
     results[id] = n_tri;
 }
 
-__global__ void sum_results(int64_t num_e, int *d_res, unsigned long long *d_sum)
-{
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
-    extern __shared__ unsigned long long s_data[];
-    if (id < num_e)
-        s_data[tid] = (unsigned long long)d_res[id];
-    else
-        s_data[tid] = 0;
-    __syncthreads();
-
-    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
-    {
-        if (tid < stride)
-            s_data[tid] += s_data[tid + stride];
-        __syncthreads();
-    }
-    if (tid == 0)
-        atomicAdd(d_sum, s_data[0]);
-}
 
 out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirected)
 {
@@ -132,7 +112,7 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<in
     CHECK(cudaGetLastError());
     CHECK(cudaDeviceSynchronize());
 
-    sum_results<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long)>>>(n_edges, d_res, d_sum);
+    reduce_vector<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long)>>>(n_edges, d_res, d_sum);
     CHECK(cudaGetLastError());
     CHECK(cudaDeviceSynchronize());
 

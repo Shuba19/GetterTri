@@ -100,15 +100,24 @@ out_type SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<in
     else
         d_search_tri_directed<<<gridDim, blockDim>>>(num_v, d_ofs, d_csr, d_res);
     cudaDeviceSynchronize();
-    std::vector<int> results(num_v);
-    CHECK(cudaMemcpy(results.data(), d_res, num_v * sizeof(int), cudaMemcpyDeviceToHost));
-    cudaFree(d_res);
     cudaFree(d_csr);
     cudaFree(d_ofs);
     int64_t n_tri = 0;
-    for (auto i : results)
-        n_tri += i;
-    if(!undirect)
-        n_tri/=6;
+
+    int64_t nr_blocks = (n_edges + 127) / 128;
+    dim3 r_blockDim(128);
+    dim3 r_gridDim(nr_blocks);
+    unsigned long long *d_sum = nullptr;
+
+    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    reduce_vector<<<r_gridDim, r_blockDim>>>(num_v, d_res, d_sum);
+    cudaDeviceSynchronize();
+    unsigned long long h_sum = 0;
+    CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    n_tri = h_sum;
+    CHECK(cudaFree(d_sum));
+    CHECK(cudaFree(d_res));
+    if(undirect)
+        n_tri = n_tri / 3;
     return n_tri;
 }

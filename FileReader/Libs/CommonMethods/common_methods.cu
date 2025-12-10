@@ -41,3 +41,46 @@ __device__ bool bin_search(int goal, int *v, int len)
     }
     return (l < len) && (v[l] == goal);
 }
+
+
+__global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_sum)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid = threadIdx.x;
+    extern __shared__ unsigned long long s_data[];
+    if (id < num_e)
+        s_data[tid] = (unsigned long long)d_res[id];
+    else
+        s_data[tid] = 0;
+    __syncthreads();
+
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+            s_data[tid] += s_data[tid + stride];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(d_sum, s_data[0]);
+}
+
+__global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long *d_sum)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid = threadIdx.x;
+    extern __shared__ unsigned long long s_data[];
+    if (id < num_e)
+        s_data[tid] = (unsigned long long)d_res[id];
+    else
+        s_data[tid] = 0;
+    __syncthreads();
+
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+            s_data[tid] += s_data[tid + stride];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(d_sum, s_data[0]);
+}
