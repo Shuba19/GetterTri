@@ -94,6 +94,12 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<in
     int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr;
     unsigned long long *d_sum = nullptr;
     n_edges = n_edges<<1;
+
+    if (n_edges == 0) {
+        if (!undirected) return 0;
+        return 0;
+    }
+
     size_t s = n_edges *sizeof(int);
     int64_t n_blocks = (n_edges + 127) / 128;
     CHECK(cudaMalloc(&d_ofs, (offsets.size()) * sizeof(int)));

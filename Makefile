@@ -1,4 +1,4 @@
-PROGRAMNAME = outdev
+PROGRAMNAME = out
 MAINNAME = out
 SOURCE = Main.cu
 LIB1 = ./FileReader/Libs/CUDA_Tri_Edge_Iterator/EdgeIterator.cu

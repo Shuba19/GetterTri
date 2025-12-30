@@ -5,7 +5,7 @@
     "type": "cuda-gdb",
     "request": "launch",
     "program": "${workspaceFolder}/out",
-    "args": ["-i","${workspaceFolder}/test/sample.graph","-v" ,"-mode", "3"]
+    "args": ["-i","${workspaceFolder}/../test/m_8.txt","-v" ,"-mode", "0"]
   }
   ]
 }

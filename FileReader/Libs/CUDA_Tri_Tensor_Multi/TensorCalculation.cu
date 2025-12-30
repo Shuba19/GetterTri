@@ -41,25 +41,7 @@ __global__ void tiles_builder(int tpr, int num_v, int total_t, int *csr, int *of
                 int t_s = 0;
                 if (x < num_v)
                 {
-                    int low = of1;
-                    int high = of2 - 1;
-                    while (low <= high)
-                    {
-                        int mid = low + ((high - low) >> 1);
-                        if (csr[mid] == x)
-                        {
-                            t_s = 1;
-                            break;
-                        }
-                        else if (csr[mid] < x)
-                        {
-                            low = mid + 1;
-                        }
-                        else
-                        {
-                            high = mid - 1;
-                        }
-                    }
+                    bin_search(x, &csr[of1], of2 - of1) ? t_s = 1 : t_s = 0;
                 }
                 c = (c << 1) | (u_int16_t)t_s;
             }
@@ -98,12 +80,27 @@ __global__ void countTriangle(int tpr, tiles_b *matrix, double *square)
         int c2 = min(k_tile, t_row);
         int id2 = r2 * (r2 + 1) / 2 + c2;
 
-        u_int16_t a_row = matrix[id1].tile[row];
-        u_int16_t b_row = matrix[id2].tile[row];
+        if (t_col > k_tile)
+        {
+            u_int16_t a_val = matrix[id1].tile[col];
+            A[tid] = __int2half_ru((a_val >> (15 - row)) & 1);
+        }
+        else
+        {
+            u_int16_t a_row = matrix[id1].tile[row];
+            A[tid] = __int2half_ru((a_row >> (15 - col)) & 1);
+        }
 
-        A[tid] = __int2half_ru((a_row >> (15 - col)) & 1);
-        B[tid] = __int2half_ru((b_row >> (15 - col)) & 1);
-
+        if (k_tile > t_row)
+        {
+            u_int16_t b_val = matrix[id2].tile[col];
+            B[tid] = __int2half_ru((b_val >> (15 - row)) & 1);
+        }
+        else
+        {
+            u_int16_t b_row = matrix[id2].tile[row];
+            B[tid] = __int2half_ru((b_row >> (15 - col)) & 1);
+        }
         __syncthreads();
         if (tid < 32)
         {
@@ -153,13 +150,27 @@ __global__ void cubeMatrix(int tpr, tiles_b *matrix, double *square, int64_t *di
         int r2 = max(k_tile, t_row);
         int c2 = min(k_tile, t_row);
         int id2 = r2 * (r2 + 1) / 2 + c2;
+ if (t_col < k_tile)
+        {
+             double a = square[(int64_t)id1 * 256 + col * 16 + row];
+             A[tid] = __double2half(a);
+        }
+        else
+        {
+             double a = square[(int64_t)id1 * 256 + tid];
+             A[tid] = __double2half(a);
+        }
 
-        double a = square[(int64_t)id1 * 256 + tid];
-        u_int16_t b_row_val = matrix[id2].tile[row];
-
-        A[tid] = __double2half(a);
-        B[tid] = __int2half_ru((b_row_val >> (15 - col)) & 1);
-
+        if (k_tile > t_row)
+        {
+            u_int16_t b_val = matrix[id2].tile[col];
+            B[tid] = __int2half_ru((b_val >> (15 - row)) & 1);
+        }
+        else
+        {
+            u_int16_t b_row_val = matrix[id2].tile[row];
+            B[tid] = __int2half_ru((b_row_val >> (15 - col)) & 1);
+        }
         __syncthreads();
         if (tid < 32)
         {
@@ -228,19 +239,26 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     cudaDeviceSynchronize();
 
     cubeMatrix<<<total_tiles, blocks_dimension>>>(tiles_per_row, d_tiles, d_square, d_diag, num_v);
+    out_type n_tri = 0;
+
+    int64_t nr_blocks = (num_v + 127) / 128;
+    dim3 r_blockDim(128);
+    dim3 r_gridDim(nr_blocks);
+    unsigned long long *d_sum = nullptr;
+
+    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+
     cudaDeviceSynchronize();
 
-    std::vector<int64_t> res(num_v);
-
-    cudaMemcpy(res.data(), d_diag, num_v * sizeof(int64_t), cudaMemcpyDeviceToHost);
-
     cudaFree(d_tiles);
-    cudaFree(d_diag);
     cudaFree(d_square);
 
-    int64_t num = 0;
-    for (auto i : res)
-        num += (int64_t)(i);
-
-    return num / 6;
+    reduce_vector<<<r_gridDim, r_blockDim>>>(num_v, d_diag, d_sum);
+    cudaDeviceSynchronize();
+    unsigned long long h_sum = 0;
+    CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    n_tri = h_sum;
+    cudaFree(d_diag);
+    return n_tri / 6;
 }
