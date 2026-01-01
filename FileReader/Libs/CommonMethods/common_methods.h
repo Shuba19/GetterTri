@@ -9,6 +9,8 @@
 #include <cuda_runtime.h>
 #include <mma.h>
 #include <cuda_fp16.h>
+#include <omp.h>
+#include <mutex>
 
 struct tiles
 {
@@ -32,5 +34,8 @@ out_type SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int
 out_type SearchTriangle_Node_Iterator(int num_v,int64_t n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
 
 out_type TTC(int num_v,int64_t n_edges, std::vector<int>offsets, std::vector<int> csr);
+
+out_type triangle_couting_CPU(int num_v,int64_t n_edges,const std::vector<int>& offsets,const std::vector<int>& csr);    
+
 
 #endif

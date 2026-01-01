@@ -169,6 +169,9 @@ out_type GraphFR::CalculateTriangles()
   case 2:
     triangle_count = TTC(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
+  case 3:
+    triangle_count = triangle_couting_CPU(this->num_v, this->num_edge, this->offsets, this->csr);
+    break;  
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return -1;
@@ -197,6 +200,9 @@ void GraphFR::benchmark()
   case 2:
     for (int i = 0; i < REP_BENCHMARK; i++)
       TTC(this->num_v, this->num_edge, this->offsets, this->csr);
+  case 3:
+    for (int i = 0; i < REP_BENCHMARK; i++)
+      triangle_couting_CPU(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
     break;
   default:

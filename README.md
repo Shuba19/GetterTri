@@ -20,6 +20,7 @@ To run the code, use the following command in the terminal:
     - 0: Edge Iterator
     - 1: Node Iterator
     - 2: Tensor Core Matrix Multiplication
+    - 3: CPU OpenMP
 ### Example
 An example of running the code is as follows:
 ```bash
@@ -43,8 +44,14 @@ In this approach, we iterate over each node in the graph and for each node u, we
 Since tensor cores are limited to a maximum of 16x16 matrix multiplication, I tried to use tile logic, diving the CSR matrix into 16x16, eventually padding the matrix to fit into 16x16 tiles.
 Then, I multiplied the tiles using tensor cores, and finally summed the resulting matrix's diagonal to get the number of triangles.
 ![tiles multiplication](https://images.squarespace-cdn.com/content/v1/5a8dbb09bff2006c33266320/1538285346855-38J4GKOCJFYBZMMGB230/gemmtile%281%29.gif?format=1000w)
-### Graph Partitioning
-WIP
+### CPU OpenMP
+In this approach, I used OpenMP to parallelize the Node Iterator approach on the CPU.
+This approach is useful for machines without a compatible NVIDIA GPU.
+
+## Performance Comparison
+The performance of each approach may vary depending on the characteristics of the input graph (e.g., size, density).
+In general, the Tensor Core Matrix Multiplication approach is expected to be the fastest for large and dense graphs, while the Edge Iterator and Node Iterator approaches may perform better for smaller or sparser graphs.
+The CPU OpenMP approach provides a good alternative for systems without GPU support, although it may not match the performance of GPU-based methods.
 
 ## Authors
 - [Shuba19](https://github.com/Shuba19)
