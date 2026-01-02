@@ -138,23 +138,23 @@ void GraphFR::printVerboseGraphInfo()
   {
     density *= 2.0;
   }
- /*
+
   std::cout << "----------------------------------" << std::endl;
   std::cout << "Graph Information:" << std::endl;
   std::cout << "Number of vertices: " << this->num_v << std::endl;
   std::cout << "Number of edges: " << this->num_edge << std::endl;
   std::cout << "Graph Density: " << (density * 100.0) << "%" << std::endl;
   std::cout << "CSR Size: " << this->csr.size() << std::endl;
-  std::cout << "Offsets Size: " << this->offsets.size() << std::endl;*/
+  std::cout << "Offsets Size: " << this->offsets.size() << std::endl;
   std::cout << "Mode: " << mode << std::endl;
   if (this->args.benchmark)
   {
-    //std::cout << "Benchmarking mode enabled with " << REP_BENCHMARK << " repetitions." << std::endl;
-    std::cout << "Time: " << this->timer.time / REP_BENCHMARK<< std::endl;
+    std::cout << "Benchmarking mode enabled with " << REP_BENCHMARK << " repetitions." << std::endl;
+    std::cout << "Time: " << this->timer.time / REP_BENCHMARK<< " ms" << std::endl;
   }
   else
     std::cout << "Time taken for last operation: " << this->timer.time << " ms" << std::endl;
-  //std::cout << "----------------------------------" << std::endl; 
+  std::cout << "----------------------------------" << std::endl; 
 }
 
 out_type GraphFR::CalculateTriangles()
@@ -191,7 +191,7 @@ out_type GraphFR::CalculateTriangles()
 
 void GraphFR::benchmark()
 {
-  //std::cout << "------- STARTING BENCHMARK -------" << std::endl;
+  std::cout << "------- STARTING BENCHMARK -------" << std::endl;
   SearchTriangle_Edge_Iterator(this->num_v, this->num_edge, this->offsets, this->csr, this->args.undirect);
   StartTimer();
 
@@ -220,5 +220,5 @@ void GraphFR::benchmark()
   }
   StopTimer();
   printVerboseGraphInfo();
-  //std::cout << "------- END OF BENCHMARK ---------" << std::endl;
+  std::cout << "------- END OF BENCHMARK ---------" << std::endl;
 }
