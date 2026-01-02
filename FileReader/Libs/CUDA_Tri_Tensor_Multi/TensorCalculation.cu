@@ -218,8 +218,8 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     CHECK(cudaMalloc(&d_ofs, (num_v + 1) * sizeof(int)));
     int tiles_shifted = total_tiles;
     CHECK(cudaMalloc(&d_tiles, (tiles_shifted) * sizeof(tiles_b)));
-    CHECK(cudaMemcpyAsync(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
     dim3 tb_dim_grid((total_tiles + 127) / 128);
     tiles_builder<<<tb_dim_grid, 128>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
     cudaDeviceSynchronize();

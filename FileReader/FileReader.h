@@ -14,7 +14,8 @@ enum TriMode
 {
   EDGE_ITERATOR = 0,
   NODE_ITERATOR = 1,
-  TENSOR_CALCULATION = 2
+  TENSOR_CALCULATION = 2,
+  OPENMP = 3
 };
 struct timerEvent{
     cudaEvent_t t1,t2;
