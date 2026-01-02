@@ -31,6 +31,11 @@ The folder is structured as follows:
             └── TriangleCountingCPU.cpp
 ```
 ## Compilation
+To copy the code to your local machine, use the following command:
+```bash
+git clone https://github.com/Shuba19/Cuda-Triangle-Counting.git
+cd Cuda-Triangle-Counting
+```
 To compile the code run the ``` make ``` command in the terminal
 ## Run
 To run the code, use the following command in the terminal:
