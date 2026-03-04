@@ -154,7 +154,6 @@ __global__ void edge_thread_search_tri(int num_v, int64_t num_e, const int *__re
     int s1 = ofs[s_node], e1 = ofs[s_node + 1];
     int s2 = ofs[d_node], e2 = ofs[d_node + 1];
 
-    // Salta i vicini <= d_node: contiamo solo triangoli con w > d_node > s_node
     s1 = upper_bound(csr, s1, e1, d_node);
     s2 = upper_bound(csr, s2, e2, d_node);
 
@@ -169,7 +168,6 @@ __global__ void edge_thread_search_tri(int num_v, int64_t num_e, const int *__re
 
     int n_tri = 0;
 
-    // Scelta short/long per la strategia ibrida
     int ss, se, ls, le;
     if (len1 <= len2)
     {
@@ -188,8 +186,6 @@ __global__ void edge_thread_search_tri(int num_v, int64_t num_e, const int *__re
     int short_len = se - ss;
     int long_len = le - ls;
 
-    // Merge O(n+m) se le liste sono di lunghezza simile,
-    // altrimenti binary search O(n·log m) sulla lista lunga
     if (long_len <= short_len * 16)
     {
         int i = ss, j = ls;
@@ -238,7 +234,6 @@ __global__ void edge_warp_search_tri(int num_v, int64_t num_e, const int *__rest
     int s1 = ofs[s_node], e1 = ofs[s_node + 1];
     int s2 = ofs[d_node], e2 = ofs[d_node + 1];
 
-    // Salta i vicini <= d_node: contiamo solo triangoli con w > d_node > s_node
     s1 = upper_bound(csr, s1, e1, d_node);
     s2 = upper_bound(csr, s2, e2, d_node);
 
@@ -252,7 +247,6 @@ __global__ void edge_warp_search_tri(int num_v, int64_t num_e, const int *__rest
         return;
     }
 
-    // Scelta short/long: iteriamo la lista corta, cerchiamo nella lunga
     int ss, se, ls, le;
     if (len1 <= len2)
     {
@@ -265,22 +259,18 @@ __global__ void edge_warp_search_tri(int num_v, int64_t num_e, const int *__rest
         ls = s1; le = e1;
     }
 
-    // Ogni lane prende un sottoinsieme della lista corta (stride = WARP_SIZE)
-    // e cerca ogni elemento nella lista lunga con binary search
     int n_tri = 0;
     for (int i = ss + lane; i < se; i += WARP_SIZE)
     {
         n_tri += bin_search(csr, ls, le, csr[i]);
     }
 
-    // Warp-level reduction con __shfl_down_sync
     unsigned mask = __activemask();
     for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
     {
         n_tri += __shfl_down_sync(mask, n_tri, offset);
     }
 
-    // Solo lane 0 scrive il risultato
     if (lane == 0)
         results[edge_idx] = n_tri;
 }
