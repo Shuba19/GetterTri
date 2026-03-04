@@ -8,6 +8,7 @@
 #include <sstream>
 #include <vector>
 #include <algorithm>
+#include <map>
 #include "Libs/CommonMethods/common_methods.h"
 
 enum TriMode
@@ -24,8 +25,9 @@ struct timerEvent{
 
 class GraphFR{
     int num_v, num_edge;
-    std::vector<int> csr, offsets;
+    std::vector<int> csr,s_edge, offsets;
     int numArgs;
+    int corrector = 1;
     CommandArgs args;
     timerEvent timer;
     void StartTimer();

@@ -29,7 +29,7 @@ __device__ int triangular_col_from_id(int id);
 __global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_sum);
 __global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long *d_sum);
 
-out_type SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, bool undirect);
+out_type SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, std::vector<int>& s_edge);
 
 out_type SearchTriangle_Node_Iterator(int num_v,int64_t n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
 

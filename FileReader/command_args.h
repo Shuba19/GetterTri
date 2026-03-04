@@ -13,6 +13,8 @@ struct CommandArgs {
     bool timer = false;
     bool mode_set = false;
     bool verbose = false;
+    bool snap = false;
+    int corrector = 1;
 };
 void print_help_message();
 CommandArgs parse_command_args(int argc, char** argv);

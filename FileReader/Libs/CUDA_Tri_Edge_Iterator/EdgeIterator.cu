@@ -1,4 +1,4 @@
-#include "../CommonMethods/common_methods.h"
+#include "edge_iterator_solver.h"
 #define CHECK(call)                                                         \
     {                                                                       \
         const cudaError_t error = call;                                     \
@@ -10,128 +10,82 @@
         }                                                                   \
     }
 
-
-__global__ void edge_search_tri(int num_v, int64_t num_e, int *ofs, int *csr, int *results)
-{
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (id < num_e)
-    {
-        int n_tri = 0;
-        int s_node = searchSourceNode(ofs, num_v, id) - 1;
-        int d_node = csr[id];
-        if (d_node <= s_node)
-        {
-            results[id] = 0;
-            return;
-        }
-        int s1 = ofs[s_node], e1 = ofs[s_node + 1];
-        int s2 = ofs[d_node], e2 = ofs[d_node + 1];
-        while (s1 < e1 && s2 < e2)
-        {
-            int c1 = csr[s1], c2 = csr[s2];
-            if (c1 == c2)
-            {
-                if (c1 > d_node)
-                {
-                    n_tri++;
-                }
-                s1++;
-                s2++;
-            }
-            else if (c1 < c2)
-                s1++;
-            else
-                s2++;
-        }
-        results[id] = n_tri;
-        return;
-    }
-}
-__global__ void edge_search_tri_directed(int num_v, int64_t num_e, int *ofs, int *csr, int *results)
-{
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (id >= num_e)
-        return;
-
-    int n_tri = 0;
-
-    int s_node = searchSourceNode(ofs, num_v, id) - 1;
-    int d_node = csr[id];
-
-    int s1 = ofs[s_node];
-    int e1 = ofs[s_node + 1];
-    int s2 = ofs[d_node];
-    int e2 = ofs[d_node + 1];
-
-    while (s1 < e1 && s2 < e2)
-    {
-        int c1 = csr[s1];
-        int c2 = csr[s2];
-
-        if (c1 == c2)
-        {
-            if (c1 > d_node)
-                n_tri++;
-            s1++;
-            s2++;
-        }
-        else if (c1 < c2)
-        {
-            s1++;
-        }
-        else
-        {
-            s2++;
-        }
-    }
-    results[id] = n_tri;
-}
-
-
-out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, bool undirected)
+out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, std::vector<int> &s_edge)
 {
     cudaSetDevice(0);
-    int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr;
-    unsigned long long *d_sum = nullptr;
-    n_edges = n_edges<<1;
-
-    if (n_edges == 0) {
-        if (!undirected) return 0;
+    if (n_edges == 0)
         return 0;
-    }
 
-    size_t s = n_edges *sizeof(int);
-    int64_t n_blocks = (n_edges + 127) / 128;
-    CHECK(cudaMalloc(&d_ofs, (offsets.size()) * sizeof(int)));
-    CHECK(cudaMalloc(&d_csr, s));
-    CHECK(cudaMalloc(&d_res, s));
-    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
-    CHECK(cudaMemcpy(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_csr, csr.data(),csr.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
-    dim3 blockDim(128);
-    dim3 gridDim(n_blocks);
-    if (undirected)
-        edge_search_tri<<<gridDim, blockDim>>>(num_v, n_edges, d_ofs, d_csr, d_res);
-    else
-        edge_search_tri_directed<<<gridDim, blockDim>>>(num_v, n_edges, d_ofs, d_csr, d_res);
-    CHECK(cudaGetLastError());
-    CHECK(cudaDeviceSynchronize());
-
-    reduce_vector<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long)>>>(n_edges, d_res, d_sum);
-    CHECK(cudaGetLastError());
-    CHECK(cudaDeviceSynchronize());
+    int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr, *d_s_edge = nullptr;
+    unsigned long long *d_sum = nullptr;
 
     unsigned long long tri_count = 0;
-    CHECK(cudaMemcpy(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
 
-    cudaFree(d_res);
-    cudaFree(d_csr);
-    cudaFree(d_ofs);
-    cudaFree(d_sum);
+    size_t s = n_edges * sizeof(int);
+    cudaStream_t stream;
+    CHECK(cudaStreamCreate(&stream));
 
-    int64_t n_tri = (int64_t)tri_count;
-    if (!undirected) n_tri /= 3;
+    CHECK(cudaMallocAsync(&d_ofs, offsets.size() * sizeof(int), stream));
+    CHECK(cudaMallocAsync(&d_csr, s, stream));
+    CHECK(cudaMallocAsync(&d_s_edge, s, stream));
+    CHECK(cudaMallocAsync(&d_res, s, stream));
+    CHECK(cudaMallocAsync(&d_sum, sizeof(unsigned long long), stream));
 
-    return n_tri;
+    CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemcpyAsync(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemcpyAsync(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemsetAsync(d_sum, 0, sizeof(unsigned long long), stream));
+
+    if (0)
+    {
+        int64_t n_blocks = (n_edges + 127) / 128;
+        dim3 blockDim(128);
+        dim3 gridDim(n_blocks);
+        cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
+        edge_search_tri<<<gridDim, blockDim, 0, stream>>>(num_v, n_edges, d_ofs, d_csr, d_s_edge, d_res);
+        CHECK(cudaGetLastError());
+
+        // Nessun sync necessario: kernel sullo stesso stream sono serializzati
+        reduce_vector<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long), stream>>>(n_edges, d_res, d_sum);
+        CHECK(cudaGetLastError());
+    }
+    else
+    {
+        
+        std::vector<int> th_level, warp_level;
+        filter_per_deg(offsets, s_edge, th_level, warp_level);
+        int th_level_size = th_level.size();
+        int warp_level_size = warp_level.size();
+        dim3 blkDim(128);
+        dim3 grid_th_level((th_level_size + 127) / 128);
+        dim3 grid_warp_level((warp_level_size + 3) / 4);
+        dim3 grid_reduce((n_edges + 127) / 128);
+        int *d_wp_level, *d_th_level;
+        CHECK(cudaMallocAsync(&d_th_level, th_level_size * sizeof(int), stream));
+        CHECK(cudaMallocAsync(&d_wp_level, warp_level_size * sizeof(int), stream));
+        CHECK(cudaMemcpyAsync(d_th_level, th_level.data(), th_level_size * sizeof(int), cudaMemcpyHostToDevice, stream));
+        CHECK(cudaMemcpyAsync(d_wp_level, warp_level.data(), warp_level_size * sizeof(int), cudaMemcpyHostToDevice, stream));
+        
+        if (th_level_size > 0)
+            edge_thread_search_tri<<<grid_th_level, blkDim, 0, stream>>>(num_v, th_level_size, d_ofs, d_csr, d_s_edge, d_res, d_th_level);
+        if (warp_level_size > 0)
+            edge_warp_search_tri<<<grid_warp_level, blkDim, 0, stream>>>(num_v, warp_level_size, d_ofs, d_csr, d_s_edge, d_res, d_wp_level);
+        CHECK(cudaGetLastError());
+        reduce_vector<<<grid_reduce, blkDim, blkDim.x * sizeof(unsigned long long), stream>>>(n_edges, d_res, d_sum);
+        CHECK(cudaGetLastError());
+
+        CHECK(cudaFreeAsync(d_th_level, stream));
+        CHECK(cudaFreeAsync(d_wp_level, stream));
+    }
+
+    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
+    CHECK(cudaStreamSynchronize(stream));
+
+    CHECK(cudaFreeAsync(d_res, stream));
+    CHECK(cudaFreeAsync(d_csr, stream));
+    CHECK(cudaFreeAsync(d_ofs, stream));
+    CHECK(cudaFreeAsync(d_s_edge, stream));
+    CHECK(cudaFreeAsync(d_sum, stream));
+    CHECK(cudaStreamDestroy(stream));
+    return (int64_t)tri_count;
 }

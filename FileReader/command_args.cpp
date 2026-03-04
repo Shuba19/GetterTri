@@ -39,6 +39,14 @@ CommandArgs parse_command_args(int argc, char** argv)
         else if (arg == "-v") {
             args.verbose = true; 
         }
+        else if( arg == "-snap")
+        {
+            args.snap = true;
+        }
+        else if(arg == "-nc")
+        {
+            args.corrector = 0;
+        }
         else {
             args.valid = false; 
         }

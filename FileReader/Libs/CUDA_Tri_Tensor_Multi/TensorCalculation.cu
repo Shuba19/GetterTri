@@ -208,7 +208,6 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     cudaSetDevice(0);
     int tiles_per_row = ((num_v + 15) >> 4);
     int64_t total_tiles = tiles_per_row * (tiles_per_row + 1) >> 1;
-    n_edges = n_edges << 1;
     int padded_size_csr = ((n_edges + 15) >> 4) << 4;
     int *d_csr, *d_ofs;
     tiles_b *d_tiles;

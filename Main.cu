@@ -7,5 +7,6 @@ int main(int argc, char *argv[])
     GraphFR FR(ca);
     FR.ReadFile();
     int triangles = FR.CalculateTriangles();
+    std::cout << "Number of triangles: " << triangles << std::endl;
     return 0;
 }
