@@ -22,6 +22,9 @@ struct tiles_b
     u_int16_t tile[16];
 };
 typedef int64_t out_type;
+
+void filter_per_deg(const std::vector<int> &ofs,const std::vector<int> &s_edges,std::vector<int> &thread_level,std::vector<int> &warp_level);
+
 __device__ int searchSourceNode(const int *ofs, int n, int id);
 __device__ bool bin_search(int goal, int *v, int len);
 __device__ int triangular_col_from_id(int id);
@@ -30,6 +33,7 @@ __global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_s
 __global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long *d_sum);
 
 out_type SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, std::vector<int>& s_edge);
+out_type adaptive_edge_search(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, std::vector<int> &s_edge, std::vector<int> &th_level, std::vector<int> &warp_level);
 
 out_type SearchTriangle_Node_Iterator(int num_v,int64_t n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
 

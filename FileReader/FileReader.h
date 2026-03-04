@@ -26,6 +26,7 @@ struct timerEvent{
 class GraphFR{
     int num_v, num_edge;
     std::vector<int> csr,s_edge, offsets;
+    std::vector<int> th_level, warp_level;
     int numArgs;
     int corrector = 1;
     CommandArgs args;

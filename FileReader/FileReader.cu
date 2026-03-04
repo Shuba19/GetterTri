@@ -75,7 +75,8 @@ bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
       int index = current_pos[e.src]++; 
       this->csr[index] = e.dst;
     }
-
+    if(this->args.mode == 4)
+     filter_per_deg(offsets, s_edge, this->th_level, this->warp_level); 
     return true;
   }
   while (std::getline(GraphInput, line) && pos < num_v)
@@ -110,6 +111,8 @@ bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
       }
     }
     pos++;
+    if(this->args.mode == 4)
+     filter_per_deg(offsets, s_edge, this->th_level, this->warp_level);
   }
   this->num_edge = this->num_edge << 1;
   return true;
@@ -225,6 +228,9 @@ out_type GraphFR::CalculateTriangles()
   case 3:
     triangle_count = triangle_couting_CPU(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
+  case 4:
+    triangle_count = adaptive_edge_search(this->num_v, this->num_edge, this->offsets, this->csr, this->s_edge, this->th_level, this->warp_level);
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return -1;
@@ -258,6 +264,10 @@ void GraphFR::benchmark()
     for (int i = 0; i < REP_BENCHMARK; i++)
       triangle_couting_CPU(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
+  case 4:
+    for (int i = 0; i < REP_BENCHMARK; i++)
+      adaptive_edge_search(this->num_v, this->num_edge, this->offsets, this->csr, this->s_edge, this->th_level, this->warp_level);
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return;
@@ -266,3 +276,4 @@ void GraphFR::benchmark()
   printVerboseGraphInfo();
   std::cout << "------- END OF BENCHMARK ---------" << std::endl;
 }
+
