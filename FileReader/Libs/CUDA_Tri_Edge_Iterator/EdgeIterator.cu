@@ -1,4 +1,5 @@
 #include "edge_iterator_solver.h"
+#include <chrono>
 #define CHECK(call)                                                         \
     {                                                                       \
         const cudaError_t error = call;                                     \
@@ -39,11 +40,19 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<in
     dim3 blockDim(128);
     dim3 gridDim(n_blocks);
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
+    cudaEvent_t s1,s2;
+    CHECK(cudaEventCreate(&s1));
+    CHECK(cudaEventCreate(&s2));
+    CHECK(cudaEventRecord(s1, 0));
     edge_search_tri<<<gridDim, blockDim, 0, stream>>>(num_v, n_edges, d_ofs, d_csr, d_s_edge, d_res);
     CHECK(cudaGetLastError());
-
     // Nessun sync necessario: kernel sullo stesso stream sono serializzati
     reduce_vector<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long), stream>>>(n_edges, d_res, d_sum);
+    CHECK(cudaEventRecord(s2, 0));
+    CHECK(cudaEventSynchronize(s2));
+    float duration = 0;
+    CHECK(cudaEventElapsedTime(&duration, s1, s2));
+    std::cout << "Edge Iterator Kernel Time: " << duration << " ms" << std::endl;
     CHECK(cudaGetLastError());
 
     CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
