@@ -34,6 +34,7 @@ class GraphFR{
     void StartTimer();
     void StopTimer();
     bool GraphReader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
+    bool SNAP_Reader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
     bool IsMetisComment(const std::string& str);
     void printVerboseGraphInfo();
     void benchmark();

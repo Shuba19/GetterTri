@@ -38,5 +38,21 @@ compare: $(PROGRAMNAME)
 	$(TESTD)
 	$(TESTM)
     
+test:
+	for graph in m12.graph m11.graph m10.graph; do \
+		echo "Running tests on $$graph with different modes..."; \
+		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++"; \
+		./$(PROGRAMNAME) -i dataset/METIS/$$graph  -mode 0; \
+		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++" ; \
+		./$(PROGRAMNAME) -i dataset/METIS/$$graph  -mode 2; \
+		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++" ; \
+		./$(PROGRAMNAME) -i dataset/METIS/$$graph  -mode 5; \
+		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++"; \
+		echo "" ; \
+	done
 clean:
 	rm -f $(PROGRAMNAME) $(CUBLAS_PROG)
+bench:
+	ncu --set full -f -o out_mode$(MODE)_m10 ./$(PROGRAMNAME) -i dataset/METIS/m10.graph -mode $(MODE) -v
+	ncu --set full -f -o out_mode$(MODE)_m11 ./$(PROGRAMNAME) -i dataset/METIS/m11.graph -mode $(MODE) -v
+	ncu --set full -f -o out_mode$(MODE)_m12 ./$(PROGRAMNAME) -i dataset/METIS/m12.graph -mode $(MODE) -v

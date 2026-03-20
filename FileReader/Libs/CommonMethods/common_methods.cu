@@ -1,13 +1,5 @@
 #include "common_methods.h"
 
-__device__ int triangular_col_from_id(int id)
-{
-    int col = 0;
-    while ((col * (col + 1)) / 2 <= id)
-        ++col;
-    return col - 1;
-}
-
 __device__ int searchSourceNode(const int *ofs, int n, int id)
 {
     int low = 0, high = n;
@@ -41,7 +33,6 @@ __device__ bool bin_search(int goal, int *v, int len)
     }
     return (l < len) && (v[l] == goal);
 }
-
 
 __global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_sum)
 {
@@ -84,3 +75,54 @@ __global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long 
     if (tid == 0)
         atomicAdd(d_sum, s_data[0]);
 }
+
+__global__ void reduce_vector(int64_t num_e, unsigned long long *d_res, unsigned long long *d_sum)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid = threadIdx.x;
+    extern __shared__ unsigned long long s_data[];
+    if (id < num_e)
+        s_data[tid] = d_res[id];
+    else
+        s_data[tid] = 0;
+    __syncthreads();
+
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+            s_data[tid] += s_data[tid + stride];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(d_sum, s_data[0]);
+}
+
+chrono_cuda::chrono_cuda(std::string mode)
+{
+        this->mode = mode;
+        cudaEventCreate(&this->start);
+        cudaEventCreate(&this->stop);       
+}
+
+void chrono_cuda::cc_start()
+{
+    cudaEventRecord(this->start);
+}
+
+void chrono_cuda::cc_stop()
+{
+    cudaEventRecord(this->stop);
+    cudaEventSynchronize(this->stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, this->start, this->stop);
+    std::cout << this->mode << " time: " << milliseconds << " ms" << std::endl;
+}
+
+
+
+chrono_cuda::~chrono_cuda()
+{
+    cudaEventDestroy(this->start);
+    cudaEventDestroy(this->stop);
+}
+

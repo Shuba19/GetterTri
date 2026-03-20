@@ -284,7 +284,6 @@ __global__ void help_search_tri(int num_v, int64_t num_e, const int *__restrict_
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= num_e)
         return;
-    int num_edge_to_search = 0;
     int s_node = s_edge[id];
     int d_node = csr[id];
     if (d_node <= s_node)

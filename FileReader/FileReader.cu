@@ -32,53 +32,11 @@ bool GraphFR::IsMetisComment(const std::string &str)
 
 bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weight, int n_skip)
 {
-  int corrector = this->args.corrector? 1 : 0;
+  int corrector = this->args.corrector ? 1 : 0;
   std::string line;
   int pos = 0;
   offsets.push_back(0);
   int sum = 0;
-  if (this->args.snap == true)
-  {
-    std::map<int, int> degrees;
-    struct Edge
-    {
-      int src, dst;
-    };
-    std::vector<Edge> edges;
-
-    while (std::getline(GraphInput, line))
-    {
-      if (line.empty() || line[0] == '#')
-        continue;
-      std::istringstream iss(line);
-      int src, dst;
-      iss >> src >> dst;
-      int s = src - corrector, d = dst - corrector;
-      degrees[s]++;
-      edges.push_back({s, d});
-      s_edge.push_back(s);
-    }
-
-    int max_id = degrees.rbegin()->first;
-    this->num_v = max_id + 1;
-    this->offsets.assign(this->num_v + 1, 0);
-    for (int i = 0; i < this->num_v; ++i)
-    {
-      this->offsets[i + 1] = this->offsets[i] + degrees[i];
-    }
-
-    this->csr.resize(edges.size());
-    std::vector<int> current_pos = this->offsets; 
-
-    for (const auto &e : edges)
-    {
-      int index = current_pos[e.src]++; 
-      this->csr[index] = e.dst;
-    }
-    if(this->args.mode == 4)
-     filter_per_deg(offsets, s_edge, this->th_level, this->warp_level); 
-    return true;
-  }
   while (std::getline(GraphInput, line) && pos < num_v)
   {
     if (IsMetisComment(line))
@@ -96,6 +54,7 @@ bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
     while (iss >> edge)
     {
       v_edge.push_back(edge - corrector);
+      
       if (e_weight)
         iss >> garbage;
     }
@@ -111,8 +70,8 @@ bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
       }
     }
     pos++;
-    if(this->args.mode == 4)
-     filter_per_deg(offsets, s_edge, this->th_level, this->warp_level);
+    if (this->args.mode == 4)
+      filter_per_deg(offsets, s_edge, this->th_level, this->warp_level);
   }
   this->num_edge = this->num_edge << 1;
   return true;
@@ -125,6 +84,13 @@ bool GraphFR::ReadFile()
   {
     std::cerr << "Error Opening File, check if the file exists or/and if the name is correct." << std::endl;
     exit(EXIT_FAILURE);
+  }
+
+  if (this->args.snap)
+  {
+    bool result = SNAP_Reader(GraphInput, false, false, 0);
+    GraphInput.close();
+    return result;
   }
 
   std::string line;
@@ -156,6 +122,83 @@ bool GraphFR::ReadFile()
   return result;
 }
 
+
+
+bool GraphFR::SNAP_Reader(std::ifstream &GraphInput, bool e_weight, bool v_weight, int n_skip)
+{
+  (void)e_weight;
+  (void)v_weight;
+  (void)n_skip;
+
+  this->csr.clear();
+  this->s_edge.clear();
+  this->offsets.clear();
+
+  std::map<int, std::vector<int>> adjacency_list;
+  std::string line;
+  this->num_v = 0;
+  this->num_edge = 0;
+  int input_corrector = this->args.corrector ? 1 : 0;
+  int max_vertex_id = -1;
+  while (std::getline(GraphInput, line))
+  {
+    if (line.empty() || line[0] == '#')
+      continue;
+    std::istringstream iss(line);
+    int src, dst;
+    if (!(iss >> src >> dst))
+      continue;
+
+    int s = src - input_corrector, d = dst - input_corrector;
+    if (s < 0 || d < 0 || s == d)
+      continue;
+
+    adjacency_list[s].push_back(d);
+    adjacency_list[d].push_back(s);
+    if (s > max_vertex_id)
+      max_vertex_id = s;
+    if (d > max_vertex_id)
+      max_vertex_id = d;
+    this->num_edge++;
+  }
+
+  if (adjacency_list.empty())
+  {
+    this->offsets.push_back(0);
+    return true;
+  }
+
+  this->num_v = max_vertex_id + 1;
+
+  this->offsets.reserve(this->num_v + 1);
+  this->offsets.push_back(0);
+  for (int v = 0; v < this->num_v; ++v)
+  {
+    auto it = adjacency_list.find(v);
+    if (it != adjacency_list.end())
+    {
+      std::vector<int> &neighbors = it->second;
+      std::sort(neighbors.begin(), neighbors.end());
+      neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
+
+      for (int dst : neighbors)
+      {
+        if(this->args.mode != 2 && this->args.mode != 5 && dst < v)
+          continue;
+        this->csr.push_back(dst);
+        this->s_edge.push_back(v);
+      }
+    }
+    this->offsets.push_back(this->csr.size());
+  }
+
+  this->num_edge = static_cast<int>(this->csr.size());
+  if (this->args.mode == 4)
+    filter_per_deg(offsets, s_edge, this->th_level, this->warp_level);
+
+  return true;
+}
+
 void GraphFR::StartTimer()
 {
   cudaEventRecord(this->timer.t1, 0);
@@ -182,10 +225,6 @@ void GraphFR::printVerboseGraphInfo()
     mode = "Tensor Calculation";
   else if (this->args.mode == 3)
     mode = "OpenMP CPU Calculation";
-  if (this->args.undirect)
-  {
-    density *= 2.0;
-  }
 
   std::cout << "----------------------------------" << std::endl;
   std::cout << "Graph Information:" << std::endl;
@@ -231,6 +270,12 @@ out_type GraphFR::CalculateTriangles()
   case 4:
     triangle_count = adaptive_edge_search(this->num_v, this->num_edge, this->offsets, this->csr, this->s_edge, this->th_level, this->warp_level);
     break;
+  case 5:
+    triangle_count = TTC_2(this->num_v, this->num_edge, this->offsets, this->csr);
+    break;
+  case 6:
+    triangle_count = TTC_3(this->num_v, this->num_edge, this->offsets, this->csr);
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return -1;
@@ -268,6 +313,14 @@ void GraphFR::benchmark()
     for (int i = 0; i < REP_BENCHMARK; i++)
       adaptive_edge_search(this->num_v, this->num_edge, this->offsets, this->csr, this->s_edge, this->th_level, this->warp_level);
     break;
+  case 5:
+    for (int i = 0; i < REP_BENCHMARK; i++)
+      TTC_2(this->num_v, this->num_edge, this->offsets, this->csr);
+    break;
+  case 6:
+    for (int i = 0; i < REP_BENCHMARK; i++)
+      TTC_3(this->num_v, this->num_edge, this->offsets, this->csr);
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return;
@@ -276,4 +329,3 @@ void GraphFR::benchmark()
   printVerboseGraphInfo();
   std::cout << "------- END OF BENCHMARK ---------" << std::endl;
 }
-
