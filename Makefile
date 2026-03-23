@@ -4,14 +4,15 @@ SOURCE = Main.cu
 
 LIB1 = ./FileReader/Libs/CUDA_Tri_Edge_Iterator/EdgeIterator.cu
 LIB2 = ./FileReader/Libs/CUDA_Tri_Node_Iterator/NodeIterator.cu
-LIB3 = ./FileReader/Libs/CUDA_Tri_Tensor_Multi/TensorCalculation.cu
+LIB3 = ./FileReader/Libs/CUDA_Tri_Tensor_Multi/
+LIBTENSORS = $(LIB3)TensorCalculation.cu $(LIB3)TensorUtilities.cu $(LIB3)TTC2.cu $(LIB3)TTC3.cu
 LIB4 = ./FileReader/Libs/OpenMPTriCalc/TriangleCountingCPU.cpp
 LIBEDGE = ./FileReader/Libs/CUDA_Tri_Edge_Iterator/edge_iterator_solver.cu
 FILER = ./FileReader/FileReader.cu ./FileReader/command_args.cpp
 COMMONMETHODS = ./FileReader/Libs/CommonMethods/common_methods.cu
 PYTHON = python3 test/FILES/gemini.py 
 
-CUDA_LIB = $(LIB1) $(LIB2) $(LIB3) $(LIB4) 
+CUDA_LIB = $(LIB1) $(LIB2) $(LIBTENSORS) $(LIB4) 
 LIBS = $(CUDA_LIB)  $(FILER) $(COMMONMETHODS)
 
 GPU_ARCH ?= sm_89
@@ -48,8 +49,19 @@ test:
 		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++" ; \
 		./$(PROGRAMNAME) -i dataset/METIS/$$graph  -mode 5; \
 		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++"; \
+		./$(PROGRAMNAME) -i dataset/METIS/$$graph  -mode 6; \
+		echo "+++++++++++++++++++++++++++++++++++++++++++++++++++"; \
 		echo "" ; \
 	done
+report:
+
+	for graph in  m11.graph m10.graph tiles.graph; do \
+		for mode in 0 2 5 6; do \
+			echo "Running $(PROGRAMNAME) on $$graph with mode $$mode..."; \
+			ncu --set full -f -o out_mode$${mode}_$${graph} ./$(PROGRAMNAME) -i dataset/METIS/$$graph -mode $$mode -v; \
+			echo "+++++++++++++++++++++++++++++++++++++++++++++++++++"; \
+		done; \
+	done 
 clean:
 	rm -f $(PROGRAMNAME) $(CUBLAS_PROG)
 bench:

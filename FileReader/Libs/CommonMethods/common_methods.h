@@ -14,6 +14,10 @@
 #include <omp.h>
 #include <mutex>
 
+#define TILE_SIDE 16
+#define TILE_BUILDER_THREADS 32
+#define TILE_ROWS_PER_GROUP 16
+#define TILE_GROUPS_PER_BLOCK (TILE_BUILDER_THREADS / TILE_ROWS_PER_GROUP)
 struct tiles
 {
     double tile[256];
@@ -31,6 +35,9 @@ __device__ int searchSourceNode(const int *ofs, int n, int id);
 __device__ bool bin_search(int goal, int *v, int len);
 __device__ int triangular_col_from_id(int id);
 
+__global__ void tiles_builder(int tpr, int num_v, int total_t, const int *__restrict__ csr, const int *__restrict__ ofs, tiles_b *__restrict__ matrix);
+
+
 __global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_sum);
 __global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long *d_sum);
 __global__ void reduce_vector(int64_t num_e, unsigned long long *d_res, unsigned long long *d_sum);
@@ -40,10 +47,20 @@ out_type adaptive_edge_search(int num_v, int64_t n_edges, std::vector<int> &offs
 
 out_type SearchTriangle_Node_Iterator(int num_v,int64_t n_edges, std::vector<int>& csr_size, std::vector<int>& csr, bool undirect);
 
-out_type TTC(int num_v,int64_t n_edges, std::vector<int>offsets, std::vector<int> csr);
 
+//TENSOR MODE
+
+__device__ void print_tile(tiles_b tile);
+__device__ void print_tile_int(int *tile); 
+__device__ void print_tile_uint8(uint8_t *tile);
+out_type TTC(int num_v,int64_t n_edges, std::vector<int>offsets, std::vector<int> csr);
 out_type TTC_2(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr);
 out_type TTC_3(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr);
+//TENSOR UTILITIES
+
+__device__ int from_x_y_to_id(int x, int y);
+
+//CPU
 out_type triangle_couting_CPU(int num_v,int64_t n_edges,const std::vector<int>& offsets,const std::vector<int>& csr);    
 
 class chrono_cuda

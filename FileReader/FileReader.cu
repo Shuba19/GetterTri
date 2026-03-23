@@ -225,6 +225,13 @@ void GraphFR::printVerboseGraphInfo()
     mode = "Tensor Calculation";
   else if (this->args.mode == 3)
     mode = "OpenMP CPU Calculation";
+  else if (this->args.mode == 4)
+    mode = "Adaptive Edge Search";
+  else if (this->args.mode == 5)
+    mode = "TTC_2";
+  else if (this->args.mode == 6)
+    mode = "TTC_3";
+  
 
   std::cout << "----------------------------------" << std::endl;
   std::cout << "Graph Information:" << std::endl;
@@ -329,3 +336,4 @@ void GraphFR::benchmark()
   printVerboseGraphInfo();
   std::cout << "------- END OF BENCHMARK ---------" << std::endl;
 }
+

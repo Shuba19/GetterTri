@@ -110,6 +110,8 @@ out_type adaptive_edge_search(int num_v, int64_t n_edges, std::vector<int> &offs
     CHECK(cudaEventRecord(data_ready, stream));
     CHECK(cudaStreamWaitEvent(stream_th, data_ready, 0));
     CHECK(cudaStreamWaitEvent(stream_wp, data_ready, 0));
+    chrono_cuda timer("Adaptive Edge Iterator");
+    timer.cc_start();
     if (th_level_size > 0)
         edge_thread_search_tri<<<grid_th_level, blkDim, 0, stream_th>>>(num_v, th_level_size, d_ofs, d_csr, d_s_edge, d_res, d_th_level);
     if (warp_level_size > 0)
@@ -125,6 +127,7 @@ out_type adaptive_edge_search(int num_v, int64_t n_edges, std::vector<int> &offs
     CHECK(cudaStreamWaitEvent(stream, wp_done, 0));
 
     reduce_vector<<<grid_reduce, blkDim, blkDim.x * sizeof(unsigned long long), stream>>>(n_edges, d_res, d_sum);
+    timer.cc_stop();
     CHECK(cudaGetLastError());
 
     CHECK(cudaEventDestroy(data_ready));
