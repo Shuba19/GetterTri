@@ -88,6 +88,72 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
     int len1 = e1 - s1;
     int len2 = e2 - s2;
 
+    int n_tri = 0;
+
+    int ss, se, ls, le;
+    if (len1 <= len2)
+    {
+        ss = s1;
+        se = e1;
+        ls = s2;
+        le = e2;
+    }
+    else
+    {
+        ss = s2;
+        se = e2;
+        ls = s1;
+        le = e1;
+    }
+    
+
+    int short_len = se - ss;
+    int long_len = le - ls;
+    if (long_len <= short_len * 16)
+    {
+        int i = ss, j = ls;
+        while (i < se && j < le)
+        {
+            int a = csr[i], b = csr[j];
+            n_tri += (a == b);
+            i += (a <= b);
+            j += (a >= b);
+        }
+    }
+    else
+    {
+        for (int i = ss; i < se; ++i)
+        {
+            n_tri += bin_search(csr, ls, le, csr[i]);
+        }
+    }
+    
+    results[id] = n_tri;
+}
+
+__global__ void edge_search_tri_atomic(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, int *__restrict__ results, unsigned long long *d_sum)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= num_e)
+        return;
+
+    int s_node = s_edge[id];
+    int d_node = csr[id];
+    if (d_node <= s_node)
+    {
+        results[id] = 0;
+        return;
+    }
+
+    int s1 = ofs[s_node], e1 = ofs[s_node + 1];
+    int s2 = ofs[d_node], e2 = ofs[d_node + 1];
+
+    s1 = upper_bound(csr, s1, e1, d_node);
+    s2 = upper_bound(csr, s2, e2, d_node);
+
+    int len1 = e1 - s1;
+    int len2 = e2 - s2;
+
     if (len1 == 0 || len2 == 0)
     {
         results[id] = 0;
@@ -133,7 +199,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         }
     }
 
-    results[id] = n_tri;
+    atomicAdd(d_sum, n_tri);
 }
 
 // thread level kernel

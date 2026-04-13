@@ -22,7 +22,7 @@ using namespace nvcuda;
 ** dopo aver creato le due matrici A e B, faccio il prodotto matrice matrice con wmma, ogni thread calcola un elemento della matrice risultato,
 ** L'accumulator C, verrà salvato in shared memory, dopo si proverà con i registri per aumentare speed,
 ** questo processo verrà iterato fino a quando non si è ottenuto il quadrato del tile. a questo punto si creerà un tile per la costruzione del tile
-** originale, e si applichera hadamard. Le ricerchè verranno eseguite tramite merge path
+** originale, e si applichera hadamard.
 */
 
 __global__ void square_then_hadamard(int tpr, tiles_b  *__restrict__ matrix, unsigned long long *__restrict__ res, int num_v)
@@ -44,7 +44,19 @@ __global__ void square_then_hadamard(int tpr, tiles_b  *__restrict__ matrix, uns
 
     C[tid] = 0;
     temp_C[tid] = 0;
-    __syncthreads();
+    __shared__ int valid_tile;
+    if (threadIdx.x == 0)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            valid_tile += matrix[tile_id].tile[i];
+        }
+    }
+    __syncwarp();
+    if (valid_tile == 0)
+    {
+        return;
+    }
 #pragma unroll
     for (int k_tile = 0; k_tile < tpr; k_tile++)
     {
@@ -196,47 +208,53 @@ out_type TTC_2(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector
     tiles_b *d_tiles;
     d_csr = nullptr;
     d_ofs = nullptr;
-
-    CHECK(cudaMalloc(&d_csr, (padded_size_csr) * sizeof(int)));
-    CHECK(cudaMalloc(&d_ofs, (num_v + 1) * sizeof(int)));
+    cudaStream_t stream;
+    CHECK(cudaStreamCreate(&stream));
+    CHECK(cudaMallocAsync(&d_csr, (padded_size_csr) * sizeof(int), stream));
+    CHECK(cudaMallocAsync(&d_ofs, (num_v + 1) * sizeof(int), stream));
     int tiles_shifted = total_tiles;
-    CHECK(cudaMalloc(&d_tiles, (tiles_shifted) * sizeof(tiles_b)));
-    CHECK(cudaMemcpy(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMallocAsync(&d_tiles, (tiles_shifted) * sizeof(tiles_b), stream));
+    CHECK(cudaMemcpyAsync(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice, stream));
     dim3 tb_dim_grid((total_tiles + TILE_GROUPS_PER_BLOCK - 1) / TILE_GROUPS_PER_BLOCK);
     chrono_cuda timer("TTC_2");
     timer.cc_start();
-    tiles_builder<<<tb_dim_grid, TILE_BUILDER_THREADS>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
+    cudaEvent_t start, stop;
+    CHECK(cudaEventCreate(&start));
+    CHECK(cudaEventCreate(&stop));
+    CHECK(cudaEventRecord(start, stream));
+    tiles_builder<<<tb_dim_grid, TILE_BUILDER_THREADS, 0, stream>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
 
     dim3 grid_dimension(total_tiles);
     CHECK(cudaGetLastError());
     unsigned long long *d_res;
-    CHECK(cudaMalloc(&d_res, total_tiles * sizeof(unsigned long long)));
+    CHECK(cudaMallocAsync(&d_res, total_tiles * sizeof(unsigned long long), stream));
+    CHECK(cudaMemsetAsync(d_res, 0, total_tiles * sizeof(unsigned long long), stream));
 
     if (1)
     {
         dim3 blocks_dimension(32);
         cudaFuncSetCacheConfig(square_then_hadamard_warped, cudaFuncCachePreferL1);
-        square_then_hadamard_warped<<<grid_dimension, blocks_dimension>>>(tiles_per_row, d_tiles, d_res, num_v);
+        square_then_hadamard_warped<<<grid_dimension, blocks_dimension, 0, stream>>>(tiles_per_row, d_tiles, d_res, num_v);
     }
     else
     {
         dim3 blocks_dimension(16, 16);
-        square_then_hadamard<<<grid_dimension, blocks_dimension>>>(tiles_per_row, d_tiles, d_res, num_v);
+        square_then_hadamard<<<grid_dimension, blocks_dimension, 0, stream>>>(tiles_per_row, d_tiles, d_res, num_v);
     }
     cudaFree(d_csr);
     cudaFree(d_ofs);
 
     unsigned long long *d_count = nullptr;
-    CHECK(cudaMalloc(&d_count, sizeof(unsigned long long)));
-    CHECK(cudaMemset(d_count, 0, sizeof(unsigned long long)));
+    CHECK(cudaMallocAsync(&d_count, sizeof(unsigned long long), stream));
+    CHECK(cudaMemsetAsync(d_count, 0, sizeof(unsigned long long), stream));
     unsigned long long h_count = 0;
     dim3 r_blockDim(128);
     dim3 r_gridDim((total_tiles + 127) / 128);
-    reduce_vector<<<r_gridDim, r_blockDim>>>(total_tiles, d_res, d_count);
+    reduce_vector<<<r_gridDim, r_blockDim, 0, stream>>>(total_tiles, d_res, d_count);
     cudaDeviceSynchronize();
     timer.cc_stop();
-    CHECK(cudaMemcpy(&h_count, d_count, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpyAsync(&h_count, d_count, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
     cudaFree(d_tiles);
     cudaFree(d_count);
     return h_count / 6;

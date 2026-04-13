@@ -1,5 +1,7 @@
 #include "FileReader.h"
 
+#define LIMIT 16
+#define DEGORDER false
 /*********************************
  * Metis Graph first line parameters:
  *
@@ -53,12 +55,19 @@ bool GraphFR::GraphReader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
     std::vector<int> v_edge;
     while (iss >> edge)
     {
+#if !DEGORDER
+      if (edge - corrector <= pos && this->args.mode != 2 && this->args.mode != 5 && this->args.mode != 6)
+        continue;
+      int mode = this->args.mode;
+      int lim = ((pos/16) +1) * 16;
+      if ((mode == 4 || mode == 5 || mode == 6) && edge - corrector > lim)
+        continue; 
+#endif
       v_edge.push_back(edge - corrector);
-      
+
       if (e_weight)
         iss >> garbage;
     }
-    std::sort(v_edge.begin(), v_edge.end());
     sum = sum + v_edge.size();
     offsets.push_back(sum);
     if (!v_edge.empty())
@@ -92,7 +101,12 @@ bool GraphFR::ReadFile()
     GraphInput.close();
     return result;
   }
-
+  if (this->args.mode == 7)
+  {
+    bool result = Tile_Reader(GraphInput, false, false, 0);
+    GraphInput.close();
+    return result;
+  }
   std::string line;
   do
   {
@@ -119,11 +133,75 @@ bool GraphFR::ReadFile()
   this->num_edge = args[1];
   bool result = GraphReader(GraphInput, e_w, v_w, args[3]);
   GraphInput.close();
+#if DEGORDER
+  ReorderByDeg();
+#endif
+
   return result;
 }
 
+bool GraphFR::ReorderByDeg()
+{
+  std::vector<std::pair<int, int>> deg_node(num_v);
 
+  for (int i = 0; i < num_v; i++)
+  {
+    deg_node[i] = {offsets[i + 1] - offsets[i], i};
+  }
+  // 2. Ordina per grado crescente
+  std::sort(deg_node.begin(), deg_node.end());
+  // 3. Crea mappa da vecchio a nuovo ID
+  std::vector<int> old_to_new(num_v);
+  for (int i = 0; i < num_v; i++)
+  {
+    old_to_new[deg_node[i].second] = i;
+  }
+  // 4. Ricostruisci CSR con nuovi ID mantenendo ogni lista ordinata
+  std::vector<int> final_csr;
+  std::vector<int> final_s_edge;
+  std::vector<int> final_offsets(num_v + 1, 0);
+  final_csr.reserve(csr.size());
+  final_s_edge.reserve(s_edge.size());
 
+  for (int i = 0; i < num_v; i++)
+  {
+    int old_id = deg_node[i].second;
+
+    std::vector<int> mapped_neighbors;
+    mapped_neighbors.reserve(offsets[old_id + 1] - offsets[old_id]);
+    for (int j = offsets[old_id]; j < offsets[old_id + 1]; j++)
+    {
+      int old_neighbor = csr[j];
+      mapped_neighbors.push_back(old_to_new[old_neighbor]);
+    }
+
+    std::sort(mapped_neighbors.begin(), mapped_neighbors.end());
+
+    final_offsets[i + 1] = final_offsets[i];
+    for (int neighbor : mapped_neighbors)
+    {
+      if (this->args.mode != 2 && this->args.mode != 5 && this->args.mode != 6 && neighbor < i)
+        continue;
+      final_csr.push_back(neighbor);
+      final_s_edge.push_back(i);
+      final_offsets[i + 1]++;
+    }
+  }
+
+  this->csr = std::move(final_csr);
+  this->s_edge = std::move(final_s_edge);
+  this->offsets = std::move(final_offsets);
+  this->num_edge = static_cast<int>(this->csr.size());
+
+  if (this->args.mode == 4)
+  {
+    this->th_level.clear();
+    this->warp_level.clear();
+    filter_per_deg(this->offsets, this->s_edge, this->th_level, this->warp_level);
+  }
+
+  return true;
+}
 bool GraphFR::SNAP_Reader(std::ifstream &GraphInput, bool e_weight, bool v_weight, int n_skip)
 {
   (void)e_weight;
@@ -183,8 +261,9 @@ bool GraphFR::SNAP_Reader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
 
       for (int dst : neighbors)
       {
-        if(this->args.mode != 2 && this->args.mode != 5 && dst < v)
+        if (this->args.mode != 2 && this->args.mode != 5  &&  this->args.mode != 6 && dst < v)
           continue;
+        
         this->csr.push_back(dst);
         this->s_edge.push_back(v);
       }
@@ -198,7 +277,132 @@ bool GraphFR::SNAP_Reader(std::ifstream &GraphInput, bool e_weight, bool v_weigh
 
   return true;
 }
+int sum_tiles(const tiles_b &tile)
+{
+  int sum = 0;
+  for (int i = 0; i < 16; i++)
+    sum += tile.tile[i];
+  return sum;
+}
+bool GraphFR::Tile_Reader(std::ifstream &GraphInput, bool e_weight, bool v_weight, int n_skip)
+{
+  this->tiles.clear();
+  this->valid_tile.clear();
 
+  // Leggi tutto il file in memoria in una volta sola
+  std::ostringstream buffer;
+  buffer << GraphInput.rdbuf();
+  std::string content = buffer.str();
+  const char *ptr = content.c_str();
+
+  std::vector<tiles_b> temp_tiles;
+  temp_tiles.reserve(1024);
+  valid_tile.reserve(1024);
+
+  int t_line = 0;
+  int track_tile = 0;
+  int pos = 0;
+
+  /*
+   *Ogni 16 righe del file creo un tot di tiles
+   * alla i_esima iterazione, verranno generate i+1 tiles provvisori, poi scartati se  non validi
+   * verranno salvati solo i tile che non sono vuoti
+   *
+   */
+  // la prima riga del file conitene il numero di vertici e di edge
+  std::istringstream iss(content.substr(0, content.find('\n')));
+  int num_v, num_edges;
+  iss >> num_v >> num_edges;
+  this->num_v = num_v;
+  this->num_edge = num_edges;
+
+  while (*ptr)
+  {
+    // Raccogli fino a 16 righe valide
+    std::vector<const char *> line_starts;
+    std::vector<const char *> line_ends;
+    line_starts.reserve(16);
+    line_ends.reserve(16);
+
+    while (t_line < 16 && *ptr)
+    {
+      const char *line_start = ptr;
+
+      // Avanza fino a fine riga
+      while (*ptr && *ptr != '\n')
+        ptr++;
+      const char *line_end = ptr;
+      if (*ptr == '\n')
+        ptr++;
+
+      // Salta righe vuote o commenti
+      if (line_start == line_end || *line_start == '#')
+        continue;
+
+      line_starts.push_back(line_start);
+      line_ends.push_back(line_end);
+      t_line++;
+    }
+
+    if (line_starts.empty())
+      break;
+
+    std::vector<tiles_b> row_tiles(pos + 1);
+    int limit = 16 * (pos + 1);
+
+    for (int row = 0; row < (int)line_starts.size(); row++)
+    {
+      // qua ogni riga viene letta, viene preso al max 16*(pos+1) valori:
+      // EX : pos = 0 -> 16 valori, pos = 1 -> 32 valori, pos = 2 -> 48 valori ect...
+      // se esiste un edge viene pushato un 1 altrimenti niente
+      const char *lptr = line_starts[row];
+      const char *lend = line_ends[row];
+
+      while (lptr < lend)
+      {
+        // Salta spazi
+        while (lptr < lend && (*lptr == ' ' || *lptr == '\t'))
+          lptr++;
+        if (lptr >= lend)
+          break;
+
+        // Parsing manuale dell'intero
+        char *end;
+        int edge = (int)std::strtol(lptr, &end, 10);
+        if (end == lptr)
+          break;
+        lptr = end;
+
+        if (edge > limit)
+          break;
+
+        int tile_index = (edge - 1) / 16;
+        if (tile_index > pos)
+          break;
+
+        // i tiles sono composti da 16 uint16_t, se esiste l'arco allora il row-esimo bit viene settato a 1
+        row_tiles[tile_index].tile[row] |= (1 << ((edge - 1) % 16));
+      }
+    }
+
+    for (const tiles_b &tile : row_tiles)
+    {
+      if (sum_tiles(tile) > 0)
+      {
+        temp_tiles.push_back(tile);
+        valid_tile.push_back(track_tile);
+      }
+      track_tile++;
+    }
+
+    t_line = 0;
+    pos++;
+  }
+
+  this->tiles = temp_tiles;
+  std::cout << "Number of valid tiles: " << this->tiles.size() << std::endl;
+  return true;
+}
 void GraphFR::StartTimer()
 {
   cudaEventRecord(this->timer.t1, 0);
@@ -231,7 +435,10 @@ void GraphFR::printVerboseGraphInfo()
     mode = "TTC_2";
   else if (this->args.mode == 6)
     mode = "TTC_3";
-  
+  else if (this->args.mode == 7)
+    mode = "Tile Reader";
+  else
+    mode = "Unknown";
 
   std::cout << "----------------------------------" << std::endl;
   std::cout << "Graph Information:" << std::endl;
@@ -283,6 +490,10 @@ out_type GraphFR::CalculateTriangles()
   case 6:
     triangle_count = TTC_3(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
+  case 7:
+    triangle_count = TTC_4(this->num_v, this->num_edge, this->tiles, this->valid_tile);
+
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return -1;
@@ -328,6 +539,10 @@ void GraphFR::benchmark()
     for (int i = 0; i < REP_BENCHMARK; i++)
       TTC_3(this->num_v, this->num_edge, this->offsets, this->csr);
     break;
+  case 7:
+    // triangle_count = TTC_4(this->num_v, this->num_edge, this->tiles, this->valid_tile);
+
+    break;
   default:
     std::cerr << "Invalid mode selected. Please choose 'n' for Node Iterator, 'e' for Edge Iterator, or 't' for Tensor Calculation." << std::endl;
     return;
@@ -336,4 +551,3 @@ void GraphFR::benchmark()
   printVerboseGraphInfo();
   std::cout << "------- END OF BENCHMARK ---------" << std::endl;
 }
-

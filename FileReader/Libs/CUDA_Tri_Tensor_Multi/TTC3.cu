@@ -104,7 +104,7 @@ __global__ void square_then_hadamard_per_tile(const tiles_b *__restrict__ matrix
 
 out_type TTC_3(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr)
 {
-    chrono_cuda data("TTC_3 Data"), tb("TTC_3 Tiles Builder"), timer("TTC_3 Counting"), timer2("TTC_3 Hadamard");
+    chrono_cuda data("TTC_3 Data"), tb("TTC_3 Tiles Builder"), timer("TTC_3 Counting"), timer2("TTC_3 Hadamard"), timer3("TTC_3 Total");
     cudaSetDevice(0);
     int64_t tiles_per_row = ((num_v + 15) >> 4);
     int64_t total_tiles = tiles_per_row * (tiles_per_row + 1) >> 1;
@@ -123,6 +123,7 @@ out_type TTC_3(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector
     data.cc_stop();
     dim3 tb_dim_grid((total_tiles + TILE_GROUPS_PER_BLOCK - 1) / TILE_GROUPS_PER_BLOCK);
     tb.cc_start();
+    timer3.cc_start();
     tiles_builder<<<tb_dim_grid, TILE_BUILDER_THREADS>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
     CHECK(cudaGetLastError());
     tb.cc_stop();
@@ -150,6 +151,7 @@ out_type TTC_3(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector
     CHECK(cudaGetLastError());
     cudaDeviceSynchronize();
     timer.cc_stop();
+    timer3.cc_stop();
     CHECK(cudaMemcpy(&h_count, d_count, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
     cudaFree(d_res);
     cudaFree(d_count);

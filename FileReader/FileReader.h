@@ -9,6 +9,7 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <set>
 #include "Libs/CommonMethods/common_methods.h"
 
 enum TriMode
@@ -18,15 +19,20 @@ enum TriMode
   TENSOR_CALCULATION = 2,
   OPENMP = 3
 };
+
 struct timerEvent{
     cudaEvent_t t1,t2;
     float time;
 };
 
+
+
 class GraphFR{
     int num_v, num_edge;
     std::vector<int> csr,s_edge, offsets;
     std::vector<int> th_level, warp_level;
+    std::vector<tiles_b> tiles;
+    std::vector<int> valid_tile;
     int numArgs;
     int corrector = 1;
     CommandArgs args;
@@ -35,6 +41,9 @@ class GraphFR{
     void StopTimer();
     bool GraphReader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
     bool SNAP_Reader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
+    bool Tile_Reader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
+    bool ReorderByDeg();
+    bool AlternativeReader(std::ifstream& GraphInput, bool e_weight, bool v_weight, int n_skip);
     bool IsMetisComment(const std::string& str);
     void printVerboseGraphInfo();
     void benchmark();

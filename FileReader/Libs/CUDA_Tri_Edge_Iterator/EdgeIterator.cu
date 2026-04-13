@@ -1,5 +1,8 @@
 #include "edge_iterator_solver.h"
 #include <chrono>
+#define R1 true
+#define R6 false
+
 #define CHECK(call)                                                         \
     {                                                                       \
         const cudaError_t error = call;                                     \
@@ -24,37 +27,33 @@ out_type SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<in
     int tot_spazio = offsets.size() * sizeof(int) + csr.size() * sizeof(int) + s_edge.size() * sizeof(int) + n_edges * sizeof(int) + sizeof(unsigned long long);
     std::cout << "Total GPU Memory Allocated: " << tot_spazio / (1024.0 * 1024.0) << " MB" << std::endl;
     size_t s = n_edges * sizeof(int);
+    cudaStream_t stream;
+    CHECK(cudaStreamCreate(&stream));
+    CHECK(cudaMallocAsync(&d_ofs, offsets.size() * sizeof(int), stream));
+    CHECK(cudaMallocAsync(&d_csr, s, stream));
+    CHECK(cudaMallocAsync(&d_s_edge, s, stream));
+    CHECK(cudaMallocAsync(&d_res, s, stream));
+    CHECK(cudaMallocAsync(&d_sum, sizeof(unsigned long long), stream));
 
-    CHECK(cudaMalloc(&d_ofs, offsets.size() * sizeof(int)));
-    CHECK(cudaMalloc(&d_csr, s));
-    CHECK(cudaMalloc(&d_s_edge, s));
-    CHECK(cudaMalloc(&d_res, s));
-    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
-
-    CHECK(cudaMemcpy(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemcpyAsync(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemcpyAsync(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+    CHECK(cudaMemsetAsync(d_sum, 0, sizeof(unsigned long long), stream));
     int64_t n_blocks = (n_edges + 127) / 128;
     dim3 blockDim(128);
     dim3 gridDim(n_blocks);
+    chrono_cuda timer("Edge Iterator", stream);
+    timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    cudaEvent_t s1,s2;
-    CHECK(cudaEventCreate(&s1));
-    CHECK(cudaEventCreate(&s2));
-    CHECK(cudaEventRecord(s1, 0));
-    edge_search_tri<<<gridDim, blockDim>>>(num_v, n_edges, d_ofs, d_csr, d_s_edge, d_res);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(num_v, n_edges, d_ofs, d_csr, d_s_edge, d_res);
     CHECK(cudaGetLastError());
-    reduce_vector<<<gridDim, blockDim, blockDim.x * sizeof(unsigned long long), 0>>>(n_edges, d_res, d_sum);
-    CHECK(cudaEventRecord(s2, 0));
-    CHECK(cudaEventSynchronize(s2));
-    float duration = 0;
-    CHECK(cudaEventElapsedTime(&duration, s1, s2));
-    std::cout << "Edge Iterator Kernel Time: " << duration << " ms" << std::endl;
+    chrono_cuda timer_reduce("Reduction", stream);
+    timer_reduce.cc_start();
+    reduce_vector<<<gridDim, blockDim, 0, stream>>>(n_edges, d_res, d_sum);
+    timer_reduce.cc_stop();
+    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());
-
-    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, 0));
-
+    timer.cc_stop();
     CHECK(cudaFree(d_res));
     CHECK(cudaFree(d_csr));
     CHECK(cudaFree(d_ofs));

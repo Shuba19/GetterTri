@@ -1,0 +1,5 @@
+%sparse tile commento, prima riga contiene num_v, num_e, num_valid_tiles
+%questi numeri sono solo per esempio
+10 50 7
+%ci saranno num_valid_tiles righe, ogni riga contiene id_tile e 16 uint_16t, che corrispondono alle righe in ordine, 0-based
+0 15 1 6 4 8 6 6 1 2 0 11 12 15 14 8
