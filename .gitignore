@@ -1,3 +1,7 @@
 out*
 .vscode/
 build
+dataset/*/*.graph
+dataset/*/*.bz2
+dataset/*/*.*
+dataset/_pycache_/

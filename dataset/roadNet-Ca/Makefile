@@ -1,0 +1,13 @@
+
+GRAPHNAME = road_Net-CA
+GRAPH = $(GRAPHNAME).txt
+GRAPH_BZ2 = $(GRAPH).gz
+GRAPH_URL = https://snap.stanford.edu/data/roadNet-CA.txt.gz
+all: $(GRAPH)
+
+$(GRAPH_BZ2):
+	wget -O $(GRAPH_BZ2) $(GRAPH_URL)
+
+$(GRAPH): $(GRAPH_BZ2)
+	gzip -dk $(GRAPH_BZ2)
+	python3 ../conv_snap_to_Metis.py $(GRAPH) $(GRAPHNAME).graph
