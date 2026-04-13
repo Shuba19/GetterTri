@@ -1,4 +1,8 @@
-#include "../CommonMethods/common_methods.h"
+#include "../../../Libs/GraphReader.h"
+#include "../../../Libs/ChronoCuda.h"
+#include "../../../Libs/CudaUtilities.h"
+#include "../../../Libs/TensorUtilities.h"
+
 using namespace nvcuda;
 #define CHECK(call)                                                         \
     {                                                                       \
@@ -11,47 +15,36 @@ using namespace nvcuda;
         }                                                                   \
     }
 
-__global__ void tiles_builder(int tpr, int num_v, int total_t, int *csr, int *ofs, tiles_b *matrix)
+int TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr);
+
+__global__ void squareMatrix(int tpr, tiles_b *matrix, double *square);
+
+
+__global__ void cubeMatrix(int tpr, tiles_b *matrix, double *square, int64_t *diag, int num_v);
+
+int main(int argc, char *argv[])
 {
-    int id = blockDim.x * blockIdx.x + threadIdx.x;
-    if (id < total_t)
+    chrono_cuda timer("Total Execution"), data_timer("File Reading"), ttc_timer("TTC total Time");
+
+    data_timer.cc_start();
+    timer.cc_start();
+    if (argv[1] == nullptr)
     {
-        int col = triangular_col_from_id(id);
-        int row = id - col * (col + 1) / 2;
-        int s_x = col * 16;
-        int s_y = row * 16;
-        int pos = 0;
-        tiles_b t_res;
-#pragma unroll
-        for (int i = 0; i < 16; ++i)
-        {
-            int y = s_y + i;
-            u_int16_t c = 0x0;
-            if (y >= num_v)
-            {
-                t_res.tile[pos++] = c;
-                continue;
-            }
-            int of1 = ofs[y];
-            int of2 = ofs[y + 1];
-#pragma unroll
-            for (int j = 0; j < 16; ++j)
-            {
-                int x = s_x + j;
-                int t_s = 0;
-                if (x < num_v)
-                {
-                    bin_search(x, &csr[of1], of2 - of1) ? t_s = 1 : t_s = 0;
-                }
-                c = (c << 1) | (u_int16_t)t_s;
-            }
-            t_res.tile[pos++] = c;
-        }
-        matrix[id] = t_res;
+        std::cerr << "Error: No input file provided. Please provide a graph file as an argument." << std::endl;
+        return EXIT_FAILURE;
     }
+    GraphData graph_data = readGraph(argv[1]);
+    data_timer.cc_stop();
+    int triangles = TTC(graph_data.num_v, graph_data.num_edge, graph_data.offsets, graph_data.csr);
+    std::cout << "Number of triangles: " << triangles << std::endl;
+    timer.cc_stop();
+    return 0;
 }
 
-__global__ void countTriangle(int tpr, tiles_b *matrix, double *square)
+
+
+
+__global__ void squareMatrix(int tpr, tiles_b *matrix, double *square)
 {
     int tile_id = blockIdx.x;
     int row = threadIdx.y;
@@ -72,13 +65,14 @@ __global__ void countTriangle(int tpr, tiles_b *matrix, double *square)
 #pragma unroll
     for (int k_tile = 0; k_tile < tpr; k_tile++)
     {
-        int r1 = max(t_col, k_tile);
-        int c1 = min(t_col, k_tile);
-        int id1 = r1 * (r1 + 1) / 2 + c1;
+        const int r2 = min(t_row, k_tile);
+        const int c2 = max(t_row, k_tile);
+        const int id2 = c2 * (c2 + 1) / 2 + r2;
 
-        int r2 = max(k_tile, t_row);
-        int c2 = min(k_tile, t_row);
-        int id2 = r2 * (r2 + 1) / 2 + c2;
+        // tile che contiene A[k, t_col] : indici (min(k,t_col), max(k,t_col))
+        const int r1 = min(k_tile, t_col);
+        const int c1 = max(k_tile, t_col);
+        const int id1 = c1 * (c1 + 1) / 2 + r1;
 
         if (t_col > k_tile)
         {
@@ -150,15 +144,15 @@ __global__ void cubeMatrix(int tpr, tiles_b *matrix, double *square, int64_t *di
         int r2 = max(k_tile, t_row);
         int c2 = min(k_tile, t_row);
         int id2 = r2 * (r2 + 1) / 2 + c2;
- if (t_col < k_tile)
+        if (t_col < k_tile)
         {
-             double a = square[(int64_t)id1 * 256 + col * 16 + row];
-             A[tid] = __double2half(a);
+            double a = square[(int64_t)id1 * 256 + col * 16 + row];
+            A[tid] = __double2half(a);
         }
         else
         {
-             double a = square[(int64_t)id1 * 256 + tid];
-             A[tid] = __double2half(a);
+            double a = square[(int64_t)id1 * 256 + tid];
+            A[tid] = __double2half(a);
         }
 
         if (k_tile > t_row)
@@ -203,12 +197,15 @@ __global__ void cubeMatrix(int tpr, tiles_b *matrix, double *square, int64_t *di
     }
 }
 
-out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr)
+
+
+int TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<int> csr)
 {
     cudaSetDevice(0);
+    chrono_cuda timer_data("TTC Data Transfer");
+    timer_data.cc_start();
     int tiles_per_row = ((num_v + 15) >> 4);
     int64_t total_tiles = tiles_per_row * (tiles_per_row + 1) >> 1;
-    n_edges = n_edges << 1;
     int padded_size_csr = ((n_edges + 15) >> 4) << 4;
     int *d_csr, *d_ofs;
     tiles_b *d_tiles;
@@ -220,9 +217,11 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     CHECK(cudaMalloc(&d_tiles, (tiles_shifted) * sizeof(tiles_b)));
     CHECK(cudaMemcpy(d_csr, csr.data(), n_edges * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
-    dim3 tb_dim_grid((total_tiles + 127) / 128);
-    tiles_builder<<<tb_dim_grid, 128>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
-    cudaDeviceSynchronize();
+    dim3 tb_dim_grid((total_tiles + TILE_GROUPS_PER_BLOCK - 1) / TILE_GROUPS_PER_BLOCK);
+    timer_data.cc_stop();
+    chrono_cuda timer("TTC");
+    timer.cc_start();
+    tiles_builder<<<tb_dim_grid, TILE_BUILDER_THREADS>>>(tiles_per_row, num_v, total_tiles, d_csr, d_ofs, d_tiles);
     cudaFree(d_csr);
     cudaFree(d_ofs);
     int64_t n_v = total_tiles * 256;
@@ -235,11 +234,10 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     CHECK(cudaMemset(d_diag, 0, num_v * sizeof(int64_t)));
 
     CHECK(cudaGetLastError());
-    countTriangle<<<total_tiles, blocks_dimension>>>(tiles_per_row, d_tiles, d_square);
-    cudaDeviceSynchronize();
+    squareMatrix<<<total_tiles, blocks_dimension>>>(tiles_per_row, d_tiles, d_square);
 
     cubeMatrix<<<total_tiles, blocks_dimension>>>(tiles_per_row, d_tiles, d_square, d_diag, num_v);
-    out_type n_tri = 0;
+    int n_tri = 0;
 
     int64_t nr_blocks = (num_v + 127) / 128;
     dim3 r_blockDim(128);
@@ -249,13 +247,12 @@ out_type TTC(int num_v, int64_t n_edges, std::vector<int> offsets, std::vector<i
     CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
     CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
 
-    cudaDeviceSynchronize();
-
     cudaFree(d_tiles);
     cudaFree(d_square);
 
     reduce_vector<<<r_gridDim, r_blockDim>>>(num_v, d_diag, d_sum);
     cudaDeviceSynchronize();
+    timer.cc_stop();
     unsigned long long h_sum = 0;
     CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
     n_tri = h_sum;
