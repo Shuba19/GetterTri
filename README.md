@@ -74,9 +74,9 @@ cd .. && rm -rf build
 
 
 ## Example
-    ```shell
-        ./bin/ef ../../dataset/road_usa/road_usa.graph
-    ```
+```shell
+    ./bin/ef ../../dataset/road_usa/road_usa.graph
+```
 # Different Approaches
 ## Iterators
 There are have been developed different versions of iterators, the mainly two are 

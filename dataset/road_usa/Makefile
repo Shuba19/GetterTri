@@ -12,4 +12,4 @@ $(GRAPH): $(GRAPH_TAR)
 	tar -xzf $(GRAPH_TAR) --strip-components=1
 
 $(GRAPH).graph: $(GRAPH)
-	python3 ../conv_mtx_to_Metis.py $(GRAPH) $(GRAPH_NAME).graph
+	python3 ../conv_mtx_to_metis $(GRAPH) $(GRAPH_NAME).graph

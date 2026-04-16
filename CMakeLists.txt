@@ -26,6 +26,9 @@ set(COMMON_SOURCES
   ${PROJECT_SOURCE_DIR}/Libs/GraphReader.cu
   ${PROJECT_SOURCE_DIR}/Libs/ChronoCuda.cu
   ${PROJECT_SOURCE_DIR}/Libs/CudaUtilities.cu
+  
+  ${PROJECT_SOURCE_DIR}/Libs/TileReader.cu
+  
 )
 
 set(TENSOR_COMMON_SOURCES
@@ -60,6 +63,7 @@ endfunction()
 if(BUILD_ITERATOR_MODES)
   add_triangle_target(e "${PROJECT_SOURCE_DIR}/Mode/Iterator/Edge/E.cu")
   add_triangle_target(ef "${PROJECT_SOURCE_DIR}/Mode/Iterator/EdgeForward/EF.cu")
+  add_triangle_target(ew "${PROJECT_SOURCE_DIR}/Mode/Iterator/EdgeWarped/EW.cu")
   add_triangle_target(n "${PROJECT_SOURCE_DIR}/Mode/Iterator/Node/N.cu")
 endif()
 
@@ -67,6 +71,7 @@ if(BUILD_TENSOR_CORE_MODES)
   add_triangle_target(ttc_bft "${PROJECT_SOURCE_DIR}/Mode/Tensor Core/Block Full Tile/TTC_BFT.cu" WITH_TENSOR_UTILS)
   add_triangle_target(ttc_bhfo "${PROJECT_SOURCE_DIR}/Mode/Tensor Core/Block Hadamard Full Operation/TTC_BHFO.cu" WITH_TENSOR_UTILS)
   add_triangle_target(ttc_bhso "${PROJECT_SOURCE_DIR}/Mode/Tensor Core/Block Hadamard Sparse Operation/TTC_BHSO.cu" WITH_TENSOR_UTILS)
-
-  set_target_properties(ttc_bft ttc_bhfo ttc_bhso PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  add_triangle_target(stconv "${PROJECT_SOURCE_DIR}/Mode/Tensor Core/SparseTileReader/converter/ST_converter.cu" WITH_TENSOR_UTILS)
+  add_triangle_target(stcomp "${PROJECT_SOURCE_DIR}/Mode/Tensor Core/SparseTileReader/compute/ST_compute.cu" WITH_TENSOR_UTILS)
+  set_target_properties(ttc_bft ttc_bhfo ttc_bhso stconv PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()

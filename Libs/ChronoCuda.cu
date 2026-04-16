@@ -28,6 +28,18 @@ void chrono_cuda::cc_stop()
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, this->start, this->stop);
     std::cout << this->mode << " time: " << milliseconds << " ms" << std::endl;
+    this->elapsed = milliseconds;
+}
+void chrono_cuda::cc_stop(bool print)
+{
+    //sync con lo stream
+    cudaEventRecord(this->stop, this->stream);
+    cudaEventSynchronize(this->stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, this->start, this->stop);
+    this->elapsed = milliseconds;
+    if(print)
+        std::cout << this->mode << " time: " << milliseconds << " ms" << std::endl;
 }
 
 

@@ -12,6 +12,7 @@ __device__ __forceinline__ bool bin_search(const int *csr, int s, int e, int key
 __global__ void reduce_vector(int64_t num_e, int *d_res, unsigned long long *d_sum);
 __global__ void reduce_vector(int64_t num_e, int64_t *d_res, unsigned long long *d_sum);
 __global__ void reduce_vector(int64_t num_e, unsigned long long *d_res, unsigned long long *d_sum);
+__global__ void reduce_vector(int num_e, int *d_res, int *d_sum);
 __global__ void reduce_vector(int num_e, int *d_res, unsigned long long *d_sum);
 __global__ void prefix_sum(int64_t num_e, int *d_res, unsigned long long *d_sum);
 

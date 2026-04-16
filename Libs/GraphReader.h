@@ -9,8 +9,16 @@
 #include <algorithm>
 #include <map>
 #include <set>
-
-
+#include <vector>
+#include <string>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <iostream>
+#include <thread>
+#include <atomic>
+#include <numeric>
 struct GraphData{
     int num_v, num_edge;
     std::vector<int> csr,s_edge, offsets;

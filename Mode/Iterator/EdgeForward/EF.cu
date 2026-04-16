@@ -13,7 +13,26 @@
         }                                                                   \
     }
 
+struct output_t
+{
+    std::string file;
+    int triangles, memory_total_mb, memory_peak_mb;
+    float total_time, kernel_time;
+    std::string unit_time;
+};
 
+void print_output_as_json(const output_t &output)
+{
+    std::cout << "{\n";
+    std::cout << "  \"file\": \"" << output.file << "\",\n";
+    std::cout << "  \"triangles\": " << output.triangles << ",\n";
+    std::cout << "  \"total_time\": " << output.total_time << ",\n";
+    std::cout << "  \"kernel_time\": " << output.kernel_time << ",\n";
+    std::cout << "  \"memory_total_mb\": " << output.memory_total_mb << ",\n";
+    std::cout << "  \"memory_peak_mb\": " << output.memory_peak_mb << ",\n";
+    std::cout << "  \"unit_time\": \"" << output.unit_time << "\"\n";
+    std::cout << "}\n";
+}
 
 __device__ __forceinline__ bool bin_search(const int *csr, int s, int e, int key)
 {
@@ -47,7 +66,7 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
 }
 __global__ void edge_search_tri(int num_v, int64_t num_e,const int * __restrict__ ofs,const int * __restrict__ csr,const int * __restrict__ s_edge,int * __restrict__ results);
 
-int SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, std::vector<int>& s_edge);
+output_t SearchTriangle_Edge_Iterator(int num_v,int64_t n_edges, std::vector<int>& offsets, std::vector<int>& csr, std::vector<int>& s_edge);
 
 int main(int argc, char *argv[])
 {
@@ -61,26 +80,32 @@ int main(int argc, char *argv[])
     }
     data_timer.cc_start();
     GraphData graph_data = readGraph_Forward(argv[1]);
-    data_timer.cc_stop();
-    int triangles = SearchTriangle_Edge_Iterator(graph_data.num_v, graph_data.num_edge, graph_data.offsets, graph_data.csr, graph_data.s_edge);
-    std::cout << "Number of triangles: " << triangles << std::endl;
-    timer.cc_stop();
+    data_timer.cc_stop(false);
+    output_t output = SearchTriangle_Edge_Iterator(graph_data.num_v, graph_data.num_edge, graph_data.offsets, graph_data.csr, graph_data.s_edge);
+    timer.cc_stop(false);
+    output.file = argv[1];
+    output.total_time = timer.elapsed;
+    output.unit_time = "ms";
+    print_output_as_json(output);
     return 0;
 }
 
 
-int SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, std::vector<int> &s_edge)
+output_t SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, std::vector<int> &s_edge)
 {
     cudaSetDevice(0);
     if (n_edges == 0)
-        return 0;
+        return output_t();
 
+    output_t output;
     int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr, *d_s_edge = nullptr;
-    unsigned long long *d_sum = nullptr;
+    int *d_sum = nullptr;
 
-    unsigned long long tri_count = 0;
-    int tot_spazio = offsets.size() * sizeof(int) + csr.size() * sizeof(int) + s_edge.size() * sizeof(int) + n_edges * sizeof(int) + sizeof(unsigned long long);
-    std::cout << "Total GPU Memory Allocated: " << tot_spazio / (1024.0 * 1024.0) << " MB" << std::endl;
+    int tri_count = 0;
+    int tot_spazio = offsets.size() * sizeof(int) + csr.size() * sizeof(int) + s_edge.size() * sizeof(int) + n_edges * sizeof(int) + sizeof(int);
+    float tot_spazio_mb = tot_spazio / (1024.0f * 1024.0f);
+    output.memory_total_mb = tot_spazio_mb;
+    output.memory_peak_mb = tot_spazio_mb;
     size_t s = n_edges * sizeof(int);
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
@@ -88,12 +113,12 @@ int SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &o
     CHECK(cudaMallocAsync(&d_csr, s, stream));
     CHECK(cudaMallocAsync(&d_s_edge, s, stream));
     CHECK(cudaMallocAsync(&d_res, s, stream));
-    CHECK(cudaMallocAsync(&d_sum, sizeof(unsigned long long), stream));
+    CHECK(cudaMallocAsync(&d_sum, sizeof(int), stream));
 
     CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
     CHECK(cudaMemcpyAsync(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
     CHECK(cudaMemcpyAsync(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-    CHECK(cudaMemsetAsync(d_sum, 0, sizeof(unsigned long long), stream));
+    CHECK(cudaMemsetAsync(d_sum, 0, sizeof(int), stream));
     int64_t n_blocks = (n_edges + 127) / 128;
     dim3 blockDim(128);
     dim3 gridDim(n_blocks);
@@ -105,16 +130,18 @@ int SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &o
     chrono_cuda timer_reduce("Reduction", stream);
     timer_reduce.cc_start();
     reduce_vector<<<gridDim, blockDim, 0, stream>>>(n_edges, d_res, d_sum);
-    timer_reduce.cc_stop();
-    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
+    timer_reduce.cc_stop(false);
+    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());
-    timer.cc_stop();
+    timer.cc_stop(false);
     CHECK(cudaFree(d_res));
     CHECK(cudaFree(d_csr));
     CHECK(cudaFree(d_ofs));
     CHECK(cudaFree(d_s_edge));
     CHECK(cudaFree(d_sum));
-    return (int64_t)tri_count;
+    output.triangles = tri_count;
+    output.kernel_time = timer.elapsed;
+    return output;
 }
 
 

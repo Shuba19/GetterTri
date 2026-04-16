@@ -14,10 +14,12 @@ class chrono_cuda
     std::string mode;
 
 public:
+    float elapsed;
     chrono_cuda(std::string mode);
     chrono_cuda(std::string mode, cudaStream_t stream);
     void cc_start();
     void cc_stop();
+    void cc_stop(bool print);
     ~chrono_cuda();
 };
 
