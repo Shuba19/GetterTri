@@ -119,6 +119,8 @@ output_t SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<in
     CHECK(cudaMemcpyAsync(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
     CHECK(cudaMemcpyAsync(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
     CHECK(cudaMemsetAsync(d_sum, 0, sizeof(int), stream));
+    std::cout << "EDGE COUNT: " << n_edges << std::endl;
+    std::cout << "CSR SIZE: " << csr.size() << std::endl;
     int64_t n_blocks = (n_edges + 127) / 128;
     dim3 blockDim(128);
     dim3 gridDim(n_blocks);

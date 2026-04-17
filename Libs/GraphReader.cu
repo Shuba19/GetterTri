@@ -65,18 +65,16 @@ GraphData readGraph(const std::string &filename)
 
   const bool e_w = (fmt & 1);
   const bool v_w = (fmt & 2);
-
-  // Pre-allocazione massiva
   graph_data.num_v = num_v;
   graph_data.offsets.reserve(num_v + 1);
-  graph_data.csr.reserve(num_e_meta); // Nota: potrebbe essere sovrastimato se dst <= src
+  graph_data.csr.reserve(num_e_meta); 
   graph_data.s_edge.reserve(num_e_meta);
   graph_data.offsets.push_back(0);
 
   int src = 0;
   while (p < end_ptr && src < num_v)
   {
-    // Salta commenti tra le righe o righe vuote
+    //saolta righe
     if (*p == '%' || *p == '\n')
     {
       if (*p == '%')
@@ -87,7 +85,6 @@ GraphData readGraph(const std::string &filename)
       continue;
     }
 
-    // Salta peso del vertice se presente
     skip_whitespace(p);
     if (v_w)
     {
@@ -99,7 +96,6 @@ GraphData readGraph(const std::string &filename)
     {
       int dst = quick_atoi(p) - 1;
 
-      // Salta peso dell'arco se presente
       if (e_w)
       {
         skip_whitespace(p);
@@ -114,11 +110,10 @@ GraphData readGraph(const std::string &filename)
 
     graph_data.offsets.push_back(static_cast<int>(graph_data.csr.size()));
     if (p < end_ptr)
-      ++p; // Vai alla riga successiva
+      ++p;
     ++src;
   }
 
-  // Gestione vertici isolati finali
   while (static_cast<int>(graph_data.offsets.size()) <= num_v)
   {
     graph_data.offsets.push_back(graph_data.offsets.back());
@@ -126,7 +121,6 @@ GraphData readGraph(const std::string &filename)
 
   graph_data.num_edge = static_cast<int>(graph_data.csr.size());
 
-  // Cleanup
   munmap((void *)file_ptr, sb.st_size);
   close(fd);
 
@@ -148,8 +142,6 @@ GraphData readGraph_Forward(const std::string &filename)
 
   GraphData graph_data;
   const char *p = file_ptr;
-
-  // 1. Salta i commenti iniziali
   while (p < end_ptr && *p == '%')
   {
     while (p < end_ptr && *p != '\n')
@@ -158,11 +150,10 @@ GraphData readGraph_Forward(const std::string &filename)
       ++p;
   }
 
-  // 2. Leggi Header (V, E, FMT)
   skip_whitespace(p);
   int num_v = quick_atoi(p);
   skip_whitespace(p);
-  int num_e_meta = quick_atoi(p); // Num archi dichiarati
+  int num_e_meta = quick_atoi(p);
   skip_whitespace(p);
   int fmt = (*p >= '0' && *p <= '9') ? quick_atoi(p) : 0;
   while (p < end_ptr && *p != '\n')
@@ -183,7 +174,6 @@ GraphData readGraph_Forward(const std::string &filename)
   int src = 0;
   while (p < end_ptr && src < num_v)
   {
-    // Salta commenti tra le righe o righe vuote
     if (*p == '%' || *p == '\n')
     {
       if (*p == '%')
@@ -194,7 +184,6 @@ GraphData readGraph_Forward(const std::string &filename)
       continue;
     }
 
-    // Salta peso del vertice se presente
     skip_whitespace(p);
     if (v_w)
     {
@@ -206,7 +195,6 @@ GraphData readGraph_Forward(const std::string &filename)
     {
       int dst = quick_atoi(p) - 1;
 
-      // Salta peso dell'arco se presente
       if (e_w)
       {
         skip_whitespace(p);
@@ -223,11 +211,10 @@ GraphData readGraph_Forward(const std::string &filename)
 
     graph_data.offsets.push_back(static_cast<int>(graph_data.csr.size()));
     if (p < end_ptr)
-      ++p; // Vai alla riga successiva
+      ++p; 
     ++src;
   }
 
-  // Gestione vertici isolati finali
   while (static_cast<int>(graph_data.offsets.size()) <= num_v)
   {
     graph_data.offsets.push_back(graph_data.offsets.back());
@@ -235,7 +222,6 @@ GraphData readGraph_Forward(const std::string &filename)
 
   graph_data.num_edge = static_cast<int>(graph_data.csr.size());
 
-  // Cleanup
   munmap((void *)file_ptr, sb.st_size);
   close(fd);
 
