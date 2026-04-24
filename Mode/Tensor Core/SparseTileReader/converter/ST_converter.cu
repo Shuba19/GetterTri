@@ -7,10 +7,12 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <algorithm>
 
 using namespace nvcuda;
 
-#define BATCHSIZE (5 << 25)
+// BATCHSIZE bilanciato per i 6GB della 4050 Mobile
+#define BATCHSIZE (1 << 25) 
 
 #define CHECK(call)                                                         \
     {                                                                       \
@@ -23,46 +25,59 @@ using namespace nvcuda;
         }                                                                   \
     }
 
-/*
-QUESTO FILE SERVE PER LA CONVERSIONE DEI GRAFI IN SPARSE TILE.
-Vengono generati BATCHSIZE tile alla volta, e ogni tile è rappresentato da 16 bit (per una tile di lato 16) che indicano la presenza o assenza di un arco. Il processo è il seguente:
-1. Si calcola il numero totale di tile necessarie per coprire la matrice
-*/
+// Forward declarations
+GraphData ReorderByDeg(const GraphData& input);
+void create_stile_file(TILES t, const std::string &filename);
 
-__global__ void tiles_builder(int tpr, int num_v, uint64_t total_t, uint64_t batch_size, const int *__restrict__ csr, const int *__restrict__ ofs, const uint64_t id, tiles_b *__restrict__ matrix);
-TILES calculate_valid_tiles(GraphData g);
-void create_stile_file(TILES t, const std::string &filename = "stile.bin");
-
-int main(int argc, char **argv)
+// Kernel ottimizzato per Ada Lovelace (RTX 4050)
+__global__ void tiles_builder_optimized(
+    int num_v, 
+    uint64_t total_t, 
+    uint64_t batch_size, 
+    const int* __restrict__ csr, 
+    const int* __restrict__ ofs, 
+    const uint64_t base_id, 
+    tiles_b* __restrict__ matrix)
 {
-    if (argc < 2)
-    {
-        std::cerr << "Usage: " << argv[0] << " <graph_file>" << std::endl;
-        return 1;
-    }
+    // Usiamo 16 thread per ogni tile. Ogni Warp (32 thread) processa 2 tile completi.
+    const uint64_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t local_tile_idx = thread_id >> 4; // thread_id / 16
+    const int local_row = thread_id & 15;          // thread_id % 16
 
-    GraphData g = readGraph(argv[1]);
-    TILES t = calculate_valid_tiles(g);
-    std::string output_file = "stile.bin";
-    if (argc >= 3)
-    {
-        output_file = argv[2];
-    }
-    create_stile_file(t, output_file);
-    return 0;
-}
+    if (local_tile_idx >= batch_size) return;
 
-void print_tile_host(tiles_b tile)
-{
-    for (int i = 0; i < TILE_SIDE; i++)
+    const uint64_t global_tile_id = base_id + local_tile_idx;
+    if (global_tile_id >= total_t) return;
+
+    // Calcolo coordinate triangolari
+    const int tile_col = triangular_col_from_id(global_tile_id);
+    const int tile_row = (int)(global_tile_id - (uint64_t)tile_col * (tile_col + 1) / 2);
+    
+    const int start_x = tile_col << 4; // tile_col * 16
+    const int y = (tile_row << 4) + local_row;
+
+    uint16_t row_bits = 0;
+
+    if (y < num_v && start_x < num_v)
     {
-        for (int j = 0; j < TILE_SIDE; j++)
+        // __ldg utilizza la cache Read-Only/L1 dedicata alle texture, eccellente per CSR
+        const int row_begin = __ldg(&ofs[y]);
+        const int row_end = __ldg(&ofs[y + 1]);
+        
+        int pos = lower_bound_device(csr, row_begin, row_end, start_x);
+        const int col_limit = start_x + 16;
+
+        // Loop di riempimento bitwise
+        while (pos < row_end)
         {
-            std::cout << ((tile.tile[i] >> (TILE_SIDE - 1 - j)) & 1) << " ";
+            const int x = __ldg(&csr[pos]);
+            if (x >= col_limit) break;
+            row_bits |= (1u << (15 - (x - start_x)));
+            pos++;
         }
-        std::cout << std::endl;
     }
-    std::cout << "-----------------" << std::endl;
+
+    matrix[local_tile_idx].tile[local_row] = row_bits;
 }
 
 TILES calculate_valid_tiles(GraphData g)
@@ -70,144 +85,130 @@ TILES calculate_valid_tiles(GraphData g)
     const int num_v = g.num_v;
     const uint64_t tpr = (num_v + 15) >> 4;
     const uint64_t total_t = tpr * (tpr + 1) / 2;
-    std::cout << "Calculating valid tiles for graph with " << num_v << " vertices and " << g.num_edge << " edges." << std::endl;
-    std::cout << "Total tiles to process: " << total_t << std::endl;
-    std::cout << "Tiles per row/column: " << tpr << std::endl;
-
+    
+    std::cout << "Vertices: " << num_v << " | Total Tiles: " << total_t << std::endl;
+    
     int *d_csr, *d_ofs;
-    tiles_b *d_matrix;
+    tiles_b *unified_matrix; 
     TILES t;
     t.num_v = num_v;
     t.num_e = g.num_edge;
-    cudaSetDevice(0);
+    
+    // Allocazione statica per la GPU
     CHECK(cudaMalloc(&d_csr, g.csr.size() * sizeof(int)));
-    CHECK(cudaMalloc(&d_ofs, g.offsets.size() * sizeof(int)));
+    CHECK(cudaMalloc(&d_ofs, (num_v + 1) * sizeof(int)));
     CHECK(cudaMemcpy(d_csr, g.csr.data(), g.csr.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(d_ofs, g.offsets.data(), g.offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMalloc(&d_matrix, BATCHSIZE * sizeof(tiles_b)));
+    CHECK(cudaMemcpy(d_ofs, g.offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
 
-    std::cout << "BATCH SIZE: " << BATCHSIZE << std::endl;
-    std::cout << "Total tiles: " << total_t << std::endl;
+    // Memoria Unificata per l'output (scrittura GPU -> lettura CPU)
+    CHECK(cudaMallocManaged(&unified_matrix, BATCHSIZE * sizeof(tiles_b)));
+    
+    // Prefetch iniziale per la GPU
+    cudaMemLocation loc = {cudaMemLocationTypeDevice, 0};
+    cudaMemPrefetchAsync(d_csr, g.csr.size() * sizeof(int), loc,0);
+    cudaMemPrefetchAsync(d_ofs, (num_v + 1) * sizeof(int), loc,0);
+
     auto t0 = std::chrono::high_resolution_clock::now();
-
-    std::vector<tiles_b> temp(BATCHSIZE);
 
     for (uint64_t id = 0; id < total_t; id += BATCHSIZE)
     {
-        const uint64_t batch_size = (id + BATCHSIZE > total_t) ? (total_t - id) : (uint64_t)BATCHSIZE;
+        const uint64_t batch_size = std::min((uint64_t)BATCHSIZE, total_t - id);
+        
+        // 16 thread per tile, 256 thread per blocco (16 tile per blocco)
+        const int threadsPerBlock = 256;
+        const int num_blocks = (batch_size * 16 + threadsPerBlock - 1) / threadsPerBlock;
 
-        const int num_blocks = (int)((batch_size + TILE_GROUPS_PER_BLOCK - 1) / TILE_GROUPS_PER_BLOCK);
+        tiles_builder_optimized<<<num_blocks, threadsPerBlock>>>(
+            num_v, total_t, batch_size, d_csr, d_ofs, id, unified_matrix
+        );
 
-        tiles_builder<<<num_blocks, TILE_GROUPS_PER_BLOCK * TILE_ROWS_PER_GROUP>>>(tpr, num_v, total_t, batch_size, d_csr, d_ofs, id, d_matrix);
         CHECK(cudaDeviceSynchronize());
-        CHECK(cudaMemcpy(temp.data(), d_matrix, batch_size * sizeof(tiles_b), cudaMemcpyDeviceToHost));
 
-        std::cout << "Processed tiles: " << id + batch_size << " / " << total_t << std::endl;
-
+        // Filtraggio veloce CPU: usiamo uint64_t per controllare 4 righe alla volta (16 righe = 4 uint64)
         for (uint64_t i = 0; i < batch_size; i++)
         {
-            uint16_t s = 0;
-            for (int j = 0; j < TILE_SIDE; j++)
-            {
-                s |= temp[i].tile[j];
-            }
-            if (s == 0)
+            const uint64_t* check = reinterpret_cast<const uint64_t*>(&unified_matrix[i]);
+            if (check[0] == 0 && check[1] == 0 && check[2] == 0 && check[3] == 0) 
                 continue;
 
-            const uint64_t global_id = id + i;
-            if (global_id < total_t)
-            {
-                t.tiles.push_back(temp[i]);
-                t.tile_ids.push_back(global_id);
-            }
+            t.tiles.push_back(unified_matrix[i]);
+            t.tile_ids.push_back(id + i);
         }
+        std::cout << "Progress: " << (id + batch_size) * 100 / total_t << "%\r" << std::flush;
     }
+
     auto t1 = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(t1 - t0);
-    std::cout << "Tile conversion time: " << duration.count() << " s" << std::endl;
+    std::cout << "\nConversion done in: " << std::chrono::duration_cast<std::chrono::seconds>(t1 - t0).count() << "s" << std::endl;
 
     cudaFree(d_csr);
     cudaFree(d_ofs);
-    cudaFree(d_matrix);
+    cudaFree(unified_matrix);
 
     return t;
 }
-void create_stile_file(TILES t, const std::string &filename)
+
+int main(int argc, char **argv)
 {
-    std::ofstream file(filename, std::ios::binary);
-    if (!file)
-    {
-        std::cerr << "Errore creazione file binario" << std::endl;
-        return;
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <graph_file> [output_file]" << std::endl;
+        return 1;
     }
 
-    // 1. Scrivi header
-    file.write(reinterpret_cast<const char *>(&t.num_v), sizeof(int));
-    file.write(reinterpret_cast<const char *>(&t.num_e), sizeof(int));
-
-    uint64_t num_valid_tiles = t.tiles.size();
-    file.write(reinterpret_cast<const char *>(&num_valid_tiles), sizeof(uint64_t));
-
-    std::cout << "Number of vertices: " << t.num_v << std::endl;
-    std::cout << "Number of edges: " << t.num_e << std::endl;
-    std::cout << "Number of valid tiles: " << num_valid_tiles << std::endl;
-
-    for (size_t i = 0; i < num_valid_tiles; ++i)
-    {
-        file.write(reinterpret_cast<const char *>(&t.tile_ids[i]), sizeof(uint64_t));
-        file.write(reinterpret_cast<const char *>(t.tiles[i].tile), 16 * sizeof(u_int16_t));
-    }
-
-    file.close();
+    GraphData g = readGraph(argv[1]);
+    std::cout << "Reordering graph by degree..." << std::endl;
+    GraphData g_reordered = ReorderByDeg(g);
+    
+    TILES t = calculate_valid_tiles(g_reordered);
+    
+    std::string output_file = (argc >= 3) ? argv[2] : "stile.bin";
+    create_stile_file(t, output_file);
+    
+    return 0;
 }
-__global__ void tiles_builder(int tpr, int num_v, uint64_t total_t, uint64_t batch_size, const int *__restrict__ csr, const int *__restrict__ ofs, const uint64_t id, tiles_b *__restrict__ matrix)
-{
-    (void)tpr;
 
-    const uint64_t global_thread = (uint64_t)blockDim.x * blockIdx.x + threadIdx.x;
-    const uint64_t tile_id = global_thread / TILE_ROWS_PER_GROUP + id;
-    const int local_row = threadIdx.x & (TILE_ROWS_PER_GROUP - 1);
-    const int tile_slot = threadIdx.x / TILE_ROWS_PER_GROUP;
+// Reorder rimane uguale alla tua logica corretta
+GraphData ReorderByDeg(const GraphData& input) {
+    GraphData output;
+    output.num_v = input.num_v;
+    std::vector<std::pair<int, int>> deg_node(input.num_v);
+    for (int i = 0; i < input.num_v; i++) 
+        deg_node[i] = {input.offsets[i + 1] - input.offsets[i], i};
 
-    __shared__ int shared_tile_col[TILE_GROUPS_PER_BLOCK];
-    __shared__ int shared_tile_row[TILE_GROUPS_PER_BLOCK];
+    std::sort(deg_node.begin(), deg_node.end());
 
-    if (local_row == 0 && tile_id < total_t && (tile_id - id) < batch_size)
-    {
-        const int tile_col = triangular_col_from_id(tile_id);
-        shared_tile_col[tile_slot] = tile_col;
-        shared_tile_row[tile_slot] = (int)(tile_id - (uint64_t)tile_col * (tile_col + 1) / 2);
+    std::vector<int> old_to_new(input.num_v);
+    for (int i = 0; i < input.num_v; i++) 
+        old_to_new[deg_node[i].second] = i;
+
+    output.offsets.assign(input.num_v + 1, 0);
+    output.csr.reserve(input.csr.size());
+
+    for (int i = 0; i < input.num_v; i++) {
+        int old_id = deg_node[i].second;
+        int start = input.offsets[old_id], end = input.offsets[old_id + 1];
+        std::vector<int> neighbors;
+        for (int j = start; j < end; j++) 
+            neighbors.push_back(old_to_new[input.csr[j]]);
+        
+        std::sort(neighbors.begin(), neighbors.end());
+        for (int n : neighbors) output.csr.push_back(n);
+        output.offsets[i + 1] = (int)output.csr.size();
     }
-    __syncthreads();
-    if (tile_id >= total_t || (tile_id - id) >= batch_size)
-        return;
+    output.num_edge = (int)output.csr.size();
+    return output;
+}
 
-    const int tile_col = shared_tile_col[tile_slot];
-    const int tile_row = shared_tile_row[tile_slot];
-    const int start_x = tile_col * TILE_SIDE;
-    const int y = tile_row * TILE_SIDE + local_row;
-
-    if (y >= num_v || start_x >= num_v)
-    {
-        matrix[tile_id - id].tile[local_row] = 0;
-        return;
+void create_stile_file(TILES t, const std::string &filename) {
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) return;
+    file.write((char*)&t.num_v, sizeof(int));
+    file.write((char*)&t.num_e, sizeof(int));
+    uint64_t nv = t.tiles.size();
+    file.write((char*)&nv, sizeof(uint64_t));
+    for (size_t i = 0; i < nv; ++i) {
+        file.write((char*)&t.tile_ids[i], sizeof(uint64_t));
+        file.write((char*)t.tiles[i].tile, 16 * sizeof(uint16_t));
     }
-
-    const int row_begin = ofs[y];
-    const int row_end = ofs[y + 1];
-    const int col_limit = min(start_x + TILE_SIDE, num_v);
-    int pos = lower_bound_device(csr, row_begin, row_end, start_x);
-    u_int16_t row_bits = 0;
-
-    while (pos < row_end)
-    {
-        const int x = csr[pos];
-        if (x >= col_limit)
-            break;
-
-        row_bits |= static_cast<u_int16_t>(1u << (TILE_SIDE - 1 - (x - start_x)));
-        ++pos;
-    }
-
-    matrix[tile_id - id].tile[local_row] = row_bits;
+    file.close();
+    std::cout << "Saved " << nv << " valid tiles to " << filename << std::endl;
 }

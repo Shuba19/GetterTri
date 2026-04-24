@@ -18,29 +18,6 @@ using namespace nvcuda;
     }
 
 
-struct output_t
-{
-    std::string file;
-    int triangles = -1,  memory_peak_mb = -1;
-    float memory_total_mb = -1;
-    float total_time, kernel_time;
-    std::string unit_time;
-};
-
-void print_output_as_json(const output_t &output)
-{
-    std::cout << "{\n";
-    std::cout << "  \"file\": \"" << output.file << "\",\n";
-    std::cout << "  \"triangles\": " << output.triangles << ",\n";
-    std::cout << "  \"total_time\": " << output.total_time << ",\n";
-    std::cout << "  \"kernel_time\": " << output.kernel_time << ",\n";
-    std::cout << "  \"memory_total_mb\": " << output.memory_total_mb << ",\n";
-    std::cout << "  \"memory_peak_mb\": " << output.memory_peak_mb << ",\n";
-    std::cout << "  \"unit_time\": \"" << output.unit_time << "\"\n";
-    std::cout << "}\n";
-}
-
-
 // Cambiato il tipo di res in unsigned long long*
 __global__ void square_then_hadamard_warped_sparse(
     int tpr, 
@@ -103,7 +80,7 @@ output_t TTC_4(TILES &t)
     output.triangles = (int)tri / 6;
     float memory_total;
     memory_total = (float)((t.tiles.size() * sizeof(tiles_b) + t.tile_ids.size() * sizeof(int64_t) + sizeof(unsigned long long)) / (1024.0 * 1024.0));
-    output.memory_total_mb = memory_total;
+    output.memory_total = memory_total;
     return output;
 }
 
