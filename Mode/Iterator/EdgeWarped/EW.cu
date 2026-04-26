@@ -7,7 +7,7 @@
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-
+#define WORK_LOAD_HEAVY 0
 #define CHECK(call)                                                         \
     {                                                                       \
         const cudaError_t error = call;                                     \
@@ -22,24 +22,18 @@
 using namespace cooperative_groups;
 
 namespace cg = cooperative_groups;
-
-__device__ __forceinline__ bool bin_search(const int *csr, int s, int e, int key)
+__device__ __forceinline__ bool bin_search(const int *__restrict__ csr, int s, int e, int key)
 {
-    int l = s, r = e - 1;
-    while (l <= r)
+    while (s < e)
     {
-        int m = (l + r) >> 1;
-        int v = csr[m];
-        if (v == key)
-            return true;
-        if (v < key)
-            l = m + 1;
-        else
-            r = m - 1;
+        int m = s + ((e - s) >> 1);
+        int v = __ldg(&csr[m]);
+        if (v == key) return true;
+        s = (v < key) ? m + 1 : s;
+        e = (v < key) ? e     : m;
     }
     return false;
 }
-
 __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key)
 {
     int l = s, r = e;
@@ -190,7 +184,7 @@ float degree_order(GraphData &graph_data)
 
 // Default Kernel for edge iterator
 __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge,
-                                unsigned long long *__restrict__ results)
+                                unsigned long long *__restrict__ results, int work_load_heavy)
 {
     cg::thread_block_tile<COOP_SIZE> warp = cg::tiled_partition<COOP_SIZE>(cg::this_thread_block());
     int lane = warp.thread_rank();
@@ -201,7 +195,6 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
     bool has_work = false;
     bool is_heavy = false;
     bool merge_path = false;
-
     if (id < num_e)
     {
         int u = __ldg(&s_edge[id]);
@@ -237,7 +230,12 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                 O_merge_path = __log10f(N) + (N);
                 merge_path = O_merge_path < O_bin_search;
                 int num_rep = merge_path ? O_bin_search : O_merge_path;
-                is_heavy = false;
+                int warp_rep = num_rep / COOP_SIZE;
+                is_heavy = warp_rep > work_load_heavy;
+#if PRINT_INFO
+                if (is_heavy)
+                    printf("Edge (%d, %d) has long_len = %d, short_len = %d, O_bin_search = %f, O_merge_path = %f\n", u, v, long_len, short_len, O_bin_search, O_merge_path);
+#endif
             }
         }
     }
@@ -281,6 +279,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         bool shared_merge_path = warp.shfl(merge_path, leader);
 
         int short_len = shared_se - shared_ss;
+        /*
         if (shared_merge_path)
         {
             for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
@@ -289,6 +288,11 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         else
             for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
                 n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
+                */
+
+#pragma unroll
+        for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
+            n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
         heavy_mask &= ~(1u << leader);
         if (lane == leader)
             has_work = false;
@@ -318,7 +322,8 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum);
+    int work_load_heavy = (int)(50.0f / (5.0f * (1.0f - 1.0f / COOP_SIZE) * log2f(graph_data.num_v/graph_data.num_edge)));;
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, work_load_heavy);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());

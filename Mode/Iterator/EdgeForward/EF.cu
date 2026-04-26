@@ -179,8 +179,6 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     int n_tri = 0;
-    // thread_block block = cg::this_thread_block();
-    // auto warp_coop = cg::tiled_partition(block, 32);
     int n_rip = 0;
     int need_help = 0;
     bool use_merge = false;
