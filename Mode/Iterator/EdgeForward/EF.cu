@@ -1,10 +1,10 @@
 #include "../../../Libs/GraphReader.h"
 #include "../../../Libs/ChronoCuda.h"
 #include "../../../Libs/CudaUtilities.h"
-
 #define TESTING false
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
+#define LONG_THRESHOLD 100
 
 #define CHECK(call)                                                         \
     {                                                                       \
@@ -16,8 +16,6 @@
             exit(1);                                                        \
         }                                                                   \
     }
-
-
 
 __device__ __forceinline__ bool bin_search(const int *csr, int s, int e, int key)
 {
@@ -50,10 +48,40 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
     return l;
 }
 
-
-__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold);
-
 output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads);
+float degree_order(GraphData &graph_data);
+int get_device_memory()
+{
+    size_t free_mem, total_mem;
+    CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+    return static_cast<int>(total_mem / (1024 * 1024)); // in MB
+}
+
+std::pair<std::string, float> calculate_space_used(const GraphData &graph_data)
+{
+    int64_t tot_spazio = graph_data.num_v * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + sizeof(int64_t);
+    if (tot_spazio < 1024)
+        return {"B", static_cast<float>(tot_spazio)};
+    else if (tot_spazio < 1024 * 1024)
+        return {"KB", tot_spazio / 1024.0f};
+    else if (tot_spazio < 1024 * 1024 * 1024)
+        return {"MB", tot_spazio / (1024.0f * 1024.0f)};
+    else
+        return {"GB", tot_spazio / (1024.0f * 1024.0f * 1024.0f)};
+}
+
+bool can_run_on_gpu(const GraphData &g)
+{
+    auto [unit, mem_used] = calculate_space_used(g);
+    if (unit == "GB")
+        mem_used *= 1024;
+    if (unit == "KB")
+        mem_used /= 1024;
+    if (unit == "B")
+        mem_used /= (1024 * 1024);
+    int device_mem = get_device_memory();
+    return mem_used < device_mem * 0.8;
+}
 
 int main(int argc, char *argv[])
 {
@@ -66,23 +94,185 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     data_timer.cc_start();
-    GraphData graph_data = readGraph_Forward(argv[1]);
+    GraphData graph_data = readGraph(argv[1]);
     data_timer.cc_stop(false);
+    float preprocess_time = degree_order(graph_data);
     output_t output;
+
+    if (!can_run_on_gpu(graph_data))
+    {
+        output.file = argv[1];
+        output.total_time = preprocess_time;
+        output.unit_time = "ms";
+        output.triangles = -1;
+        print_output_as_json(output);
+        return EXIT_FAILURE;
+    }
+
     int threshold = 10;
     graph_device g_graph;
     load_graph(graph_data, g_graph);
-    auto temp = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
-    output.time_per_threshold[threshold][BLOCK_SIZE] = temp.kernel_time;
-    output.triangles = temp.triangles;
+    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
     output.file = name;
     output.total_time = timer.elapsed;
     output.unit_time = "ms";
+    output.preprocess_time = preprocess_time;
+    output.read_time = data_timer.elapsed;
     print_output_as_json(output);
     return 0;
+}
+
+float degree_order(GraphData &graph_data)
+{
+    chrono_cuda timer("Degree Ordering");
+    timer.cc_start();
+    int n = graph_data.num_v;
+
+    std::vector<std::pair<int, int>> degree_vertex(n);
+    for (int i = 0; i < n; ++i)
+        degree_vertex[i] = {graph_data.offsets[i + 1] - graph_data.offsets[i], i};
+    std::sort(degree_vertex.begin(), degree_vertex.end());
+
+    std::vector<int> new_id(n);
+    for (int i = 0; i < n; ++i)
+        new_id[degree_vertex[i].second] = i;
+
+    std::vector<int> new_csr;
+    std::vector<int> new_s_edge;
+    std::vector<int> new_offsets(n + 1, 0);
+
+    new_csr.reserve(graph_data.num_edge / 2);
+    new_s_edge.reserve(graph_data.num_edge / 2);
+
+    for (int new_src = 0; new_src < n; ++new_src)
+    {
+        int old_src = degree_vertex[new_src].second;
+        int old_start = graph_data.offsets[old_src];
+        int old_end = graph_data.offsets[old_src + 1];
+        int start_idx = static_cast<int>(new_csr.size());
+
+        for (int j = old_start; j < old_end; ++j)
+        {
+            int new_neighbor = new_id[graph_data.csr[j]];
+            if (new_neighbor > new_src)
+            {
+                new_csr.push_back(new_neighbor);
+                new_s_edge.push_back(new_src);
+            }
+        }
+        std::sort(new_csr.begin() + start_idx, new_csr.end());
+        new_offsets[new_src + 1] = static_cast<int>(new_csr.size());
+    }
+    graph_data.offsets = std::move(new_offsets);
+    graph_data.csr = std::move(new_csr);
+    graph_data.s_edge = std::move(new_s_edge);
+    graph_data.num_edge = graph_data.csr.size();
+    timer.cc_stop(false);
+    return timer.elapsed;
+}
+
+// Default Kernel for edge iterator
+__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold, bool unbalanced)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    int n_tri = 0;
+    // thread_block block = cg::this_thread_block();
+    // auto warp_coop = cg::tiled_partition(block, 32);
+    int n_rip = 0;
+    int need_help = 0;
+    bool use_merge = false;
+    int long_len = 0, short_len = 0;
+    int ss, se, ls, le;
+    if (id < num_e)
+    {
+
+        int s_node = __ldg(&s_edge[id]);
+        int d_node = __ldg(&csr[id]);
+        if (s_node <= d_node)
+        {
+            int s1 = ofs[s_node], e1 = ofs[s_node + 1];
+            int s2 = ofs[d_node], e2 = ofs[d_node + 1];
+
+            if (s1 < e1 && s2 < e2)
+            {
+                s1 = upper_bound(csr, s1, e1, d_node);
+                s2 = upper_bound(csr, s2, e2, d_node);
+
+                int len1 = e1 - s1;
+                int len2 = e2 - s2;
+
+                if (len1 <= len2)
+                {
+                    ss = s1;
+                    se = e1;
+                    ls = s2;
+                    le = e2;
+                }
+                else
+                {
+                    ss = s2;
+                    se = e2;
+                    ls = s1;
+                    le = e1;
+                }
+
+                long_len = le - ls;
+                short_len = se - ss;
+            }
+        }
+    }
+    if (!unbalanced)
+        if (short_len > 0 && long_len > 0)
+        {
+            if (long_len <= short_len * 10)
+            {
+                int i = ss, j = ls;
+                int a = __ldg(&csr[i]);
+                int b = __ldg(&csr[j]);
+
+                while (i < se && j < le)
+                {
+                    int next_i = i + (a <= b);
+                    int next_j = j + (a >= b);
+
+                    int next_a = (next_i < se) ? __ldg(&csr[next_i]) : INT_MAX;
+                    int next_b = (next_j < le) ? __ldg(&csr[next_j]) : INT_MAX;
+
+                    n_tri += (a == b);
+                    i = next_i;
+                    j = next_j;
+                    a = next_a;
+                    b = next_b;
+                }
+            }
+            else
+            {
+                for (int i = ss; i < se; ++i)
+                {
+                    n_tri += bin_search(csr, ls, le, csr[i]);
+                }
+            }
+        }
+    // Il thread è libero, può comunicare con il warp, per aiutare a contare i triangoli degli altri thread del warp, e alleggerire il lavoro dei thread
+    // cerca se esistono thread che chiedono aiuto
+    // bisogna capire quali effettivamente abbiano bisogno di aiuto,
+    /*
+        merge_path ha un carico di base bilanciato
+        bin_search conviene se è sbilanciato
+        ma se merge_path ha un carico considerevole, allora un thread potrebbe aiutarlo
+        bisogna valutare eventuali overhead
+    */
+
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
+    if ((threadIdx.x & 31) == 0)
+        atomicAdd(results, n_tri);
 }
 
 output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads)
@@ -91,11 +281,7 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     if (graph_data.num_edge == 0)
         return output_t();
     output_t output;
-    int tri_count = 0;
-    int tot_spazio = graph_data.num_v * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + sizeof(int);
-    float tot_spazio_mb = tot_spazio / (1024.0f * 1024.0f);
-    output.memory_total = tot_spazio_mb;
-    output.memory_peak = tot_spazio_mb;
+    int64_t tri_count = 0;
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
     int64_t n_blocks = (graph_data.num_edge + num_threads - 1) / num_threads;
@@ -104,28 +290,37 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, threshold);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, threshold, false);
     CHECK(cudaGetLastError());
-    CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost, stream));
+    CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());
     timer.cc_stop(false);
     output.triangles = tri_count;
-    output.kernel_time = timer.elapsed;
+    auto [unit, memory_used] = calculate_space_used({graph_data.num_v, graph_data.num_edge, {}, {}, {}});
+    output.memory_total = memory_used;
+    output.memory_peak = memory_used;
+    output.unit_memory = unit;
+    output.time_per_threshold[threshold][128] = timer.elapsed;
     return output;
 }
 
+/*
 
-// Default Kernel for edge iterator
-__global__ void edge_search_tri(int num_v, int64_t num_e,const int *__restrict__ ofs,const int *__restrict__ csr,const int *__restrict__ s_edge,unsigned long long *__restrict__ results,int threshold)
+
+__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     int n_tri = 0;
+    // thread_block block = cg::this_thread_block();
+    // auto warp_coop = cg::tiled_partition(block, 32);
+    int n_rip = 0;
+    bool use_merge = false;int long_len = 0, short_len = 0;
     if (id < num_e)
     {
+
         int s_node = __ldg(&s_edge[id]);
         int d_node = __ldg(&csr[id]);
-
-        if (d_node > s_node)
+        if (s_node <= d_node)
         {
             int s1 = ofs[s_node], e1 = ofs[s_node + 1];
             int s2 = ofs[d_node], e2 = ofs[d_node + 1];
@@ -154,94 +349,59 @@ __global__ void edge_search_tri(int num_v, int64_t num_e,const int *__restrict__
                     le = e1;
                 }
 
-                int long_len = le - ls;
-                int short_len = se - ss;
+                 long_len = le - ls;
+                 short_len = se - ss;
 
                 if (short_len > 0 && long_len > 0)
                 {
-                    if (long_len <= short_len * threshold)
+                    bool use_merge_path  = long_len <= short_len * 10;
+                    int rip = 0;
+
+                    if (long_len <= short_len * 10)
                     {
                         int i = ss, j = ls;
+                        int a = __ldg(&csr[i]);
+                        int b = __ldg(&csr[j]);
+
                         while (i < se && j < le)
                         {
-                            int a = csr[i], b = csr[j];
+                            int next_i = i + (a <= b);
+                            int next_j = j + (a >= b);
+
+                            int next_a = (next_i < se) ? __ldg(&csr[next_i]) : INT_MAX;
+                            int next_b = (next_j < le) ? __ldg(&csr[next_j]) : INT_MAX;
+
                             n_tri += (a == b);
-                            i += (a <= b);
-                            j += (a >= b);
+                            i = next_i;
+                            j = next_j;
+                            a = next_a;
+                            b = next_b;
                         }
                     }
                     else
                     {
                         for (int i = ss; i < se; ++i)
+                        {
                             n_tri += bin_search(csr, ls, le, csr[i]);
+                        }
                     }
                 }
+                // Il thread è libero, può comunicare con il warp, per aiutare a contare i triangoli degli altri thread del warp, e alleggerire il lavoro dei thread
+
+                //cerca se esistono thread attivi
+
+                //eventualeme
+
             }
         }
+        n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
+        n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
+        n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
+        n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
+        n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
     }
-
-    n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
-    n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
-    n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
-    n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
-    n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
-
     if ((threadIdx.x & 31) == 0)
         atomicAdd(results, n_tri);
-}
-
-
-
-/*LEG
-
-output_t SearchTriangle_Edge_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr, std::vector<int> &s_edge, int threshold)
-{
-    cudaSetDevice(0);
-    if (n_edges == 0)
-        return output_t();
-
-    output_t output;
-    int *d_csr = nullptr, *d_ofs = nullptr, *d_res = nullptr, *d_s_edge = nullptr;
-    int *d_sum = nullptr;
-
-    int tri_count = 0;
-    int tot_spazio = offsets.size() * sizeof(int) + csr.size() * sizeof(int) + s_edge.size() * sizeof(int) + n_edges * sizeof(int) + sizeof(int);
-    float tot_spazio_mb = tot_spazio / (1024.0f * 1024.0f);
-    output.memory_total_mb = tot_spazio_mb;
-    output.memory_peak_mb = tot_spazio_mb;
-    size_t s = n_edges * sizeof(int);
-    cudaStream_t stream;
-    CHECK(cudaStreamCreate(&stream));
-    CHECK(cudaMallocAsync(&d_ofs, offsets.size() * sizeof(int), stream));
-    CHECK(cudaMallocAsync(&d_csr, s, stream));
-    CHECK(cudaMallocAsync(&d_s_edge, s, stream));
-    CHECK(cudaMallocAsync(&d_res, s, stream));
-    CHECK(cudaMallocAsync(&d_sum, sizeof(int), stream));
-
-    CHECK(cudaMemcpyAsync(d_ofs, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-    CHECK(cudaMemcpyAsync(d_csr, csr.data(), csr.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-    CHECK(cudaMemcpyAsync(d_s_edge, s_edge.data(), s_edge.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
-    CHECK(cudaMemsetAsync(d_sum, 0, sizeof(int), stream));
-    int dim_block = 128;
-    int64_t n_blocks = (n_edges + 127) / 128;
-    dim3 blockDim(128);
-    dim3 gridDim(n_blocks);
-    chrono_cuda timer("Edge Iterator", stream);
-    timer.cc_start();
-    cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(num_v, n_edges, d_ofs, d_csr, d_s_edge, d_sum, threshold);
-    CHECK(cudaGetLastError());
-    CHECK(cudaMemcpyAsync(&tri_count, d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
-    CHECK(cudaGetLastError());
-    timer.cc_stop(false);
-    CHECK(cudaFreeAsync(d_res, stream));
-    CHECK(cudaFreeAsync(d_csr, stream));
-    CHECK(cudaFreeAsync(d_ofs, stream));
-    CHECK(cudaFreeAsync(d_s_edge, stream));
-    CHECK(cudaFreeAsync(d_sum, stream));
-    output.triangles = tri_count;
-    output.kernel_time = timer.elapsed;
-    return output;
 }
 
 */

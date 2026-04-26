@@ -6,6 +6,9 @@
 #define TESTING false
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
+#define COOP_SIZE 32
+#define HELP_MERGE_PATH 100
+#define HELP_BIN_SEARCH 100
 
 #define CHECK(call)                                                         \
     {                                                                       \
@@ -102,6 +105,7 @@ int main(int argc, char *argv[])
     GraphData graph_data = readGraph(argv[1]);
     data_timer.cc_stop(false);
     float preprocess_time = degree_order(graph_data);
+
     output_t output;
 
     if (!can_run_on_gpu(graph_data))
@@ -118,6 +122,13 @@ int main(int argc, char *argv[])
     graph_device g_graph;
     load_graph(graph_data, g_graph);
     output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
+
+    int coutn = 0;
+    int soglia = 100;
+    for (int i = 0; i < graph_data.num_v; ++i)
+        if (graph_data.offsets[i + 1] - graph_data.offsets[i] > soglia)
+            coutn++;
+    std::cout << "Numero di nodi con grado > " << soglia << ": " << coutn << std::endl;
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
@@ -180,108 +191,114 @@ float degree_order(GraphData &graph_data)
 }
 
 // Default Kernel for edge iterator
-__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold)
+__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge,
+                                unsigned long long *__restrict__ results)
 {
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    cg::thread_block_tile<COOP_SIZE> warp = cg::tiled_partition<COOP_SIZE>(cg::this_thread_block());
+    int lane = warp.thread_rank();
+    int64_t id = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+
     int n_tri = 0;
-    // thread_block block = cg::this_thread_block();
-    // auto warp_coop = cg::tiled_partition(block, 32);
-    int n_rip = 0;
-    bool use_merge = false;
-    int long_len = 0, short_len = 0;
-    int ss, se, ls, le;
+    int ss = 0, se = 0, ls = 0, le = 0;
+    bool has_work = false;
+    bool is_heavy = false;
+    bool merge_path = false;
+
     if (id < num_e)
     {
+        int u = __ldg(&s_edge[id]);
+        int v = __ldg(&csr[id]);
 
-        int s_node = __ldg(&s_edge[id]);
-        int d_node = __ldg(&csr[id]);
-        if (s_node <= d_node)
+        if (u < v)
         {
-            int s1 = ofs[s_node], e1 = ofs[s_node + 1];
-            int s2 = ofs[d_node], e2 = ofs[d_node + 1];
+            int u_s = ofs[u], u_e = ofs[u + 1];
+            int v_s = ofs[v], v_e = ofs[v + 1];
 
-            if (s1 < e1 && s2 < e2)
+            if (u_e > u_s && v_e > v_s)
             {
-                s1 = upper_bound(csr, s1, e1, d_node);
-                s2 = upper_bound(csr, s2, e2, d_node);
-
-                int len1 = e1 - s1;
-                int len2 = e2 - s2;
-
-                
-                if (len1 <= len2)
+                if ((u_e - u_s) <= (v_e - v_s))
                 {
-                    ss = s1;
-                    se = e1;
-                    ls = s2;
-                    le = e2;
+                    ss = u_s;
+                    se = u_e;
+                    ls = v_s;
+                    le = v_e;
                 }
                 else
                 {
-                    ss = s2;
-                    se = e2;
-                    ls = s1;
-                    le = e1;
+                    ss = v_s;
+                    se = v_e;
+                    ls = u_s;
+                    le = u_e;
                 }
-
-                long_len = le - ls;
-                short_len = se - ss;
+                double O_bin_search, O_merge_path;
+                has_work = true;
+                int long_len = le - ls;
+                int short_len = se - ss;
+                O_bin_search = (short_len)*__log2f(long_len);
+                O_merge_path = __log10f(long_len) + (short_len + long_len);
+                merge_path = O_merge_path < O_bin_search;
+                int num_rep = merge_path ? O_bin_search : O_merge_path;
+                is_heavy = num_rep > 1000;
             }
-            if (short_len > 0 && long_len > 0)
-            {
-                bool use_merge_path = long_len <= short_len * 10;
-                int rip = 0;
-
-                if (long_len <= short_len * 10)
-                {
-                    int i = ss, j = ls;
-                    int a = __ldg(&csr[i]);
-                    int b = __ldg(&csr[j]);
-
-                    while (i < se && j < le)
-                    {
-                        int next_i = i + (a <= b);
-                        int next_j = j + (a >= b);
-
-                        int next_a = (next_i < se) ? __ldg(&csr[next_i]) : INT_MAX;
-                        int next_b = (next_j < le) ? __ldg(&csr[next_j]) : INT_MAX;
-
-                        n_tri += (a == b);
-                        i = next_i;
-                        j = next_j;
-                        a = next_a;
-                        b = next_b;
-                    }
-                }
-                else
-                {
-                    for (int i = ss; i < se; ++i)
-                    {
-                        n_tri += bin_search(csr, ls, le, csr[i]);
-                    }
-                }
-            }
-            // Il thread è libero, può comunicare con il warp, per aiutare a contare i triangoli degli altri thread del warp, e alleggerire il lavoro dei thread
-
-            // cerca se esistono thread che chiedono aiuto
-            // bisogna capire quali effettivamente abbiano bisogno di aiuto,
-            /*
-                merge_path ha un carico di base bilanciato
-                bin_search conviene se è sbilanciato
-                ma se merge_path ha un carico considerevole, allora un thread potrebbe aiutarlo
-                bisogna valutare eventuali overhead
-            */
         }
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
     }
+    // se light, svolge lavoro
+    if (has_work && !is_heavy)
+    {
+        if (merge_path)
+        {
+            int i = ss, j = ls;
+            int a = __ldg(&csr[i]);
+            int b = __ldg(&csr[j]);
+            while (i < se && j < le)
+            {
+                int next_i = i + (a <= b);
+                int next_j = j + (a >= b);
+                n_tri += (a == b);
+                i = next_i;
+                j = next_j;
+                a = (next_i < se) ? __ldg(&csr[next_i]) : INT_MAX;
+                b = (next_j < le) ? __ldg(&csr[next_j]) : INT_MAX;
+            }
+        }
+        else
+        {
+            for (int i = ss; i < se; ++i)
+                n_tri += bin_search(csr, ls, le, __ldg(&csr[i]));
+        }
+        has_work = false;
+    }
+    // coop
+    __syncwarp();
+    uint32_t heavy_mask = warp.ballot(has_work && is_heavy);
+
+    while (heavy_mask > 0)
+    {
+        int leader = __ffs(heavy_mask) - 1;
+
+        int shared_ss = warp.shfl(ss, leader);
+        int shared_se = warp.shfl(se, leader);
+        int shared_ls = warp.shfl(ls, leader);
+        int shared_le = warp.shfl(le, leader);
+
+        int short_len = shared_se - shared_ss;
+        for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
+            n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
+
+        heavy_mask &= ~(1u << leader);
+        if (lane == leader)
+            has_work = false;
+    }
+    
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
+    n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
+
     if ((threadIdx.x & 31) == 0)
         atomicAdd(results, n_tri);
 }
-
 output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads)
 {
     cudaSetDevice(0);
@@ -297,7 +314,7 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, threshold);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());

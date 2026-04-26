@@ -134,6 +134,8 @@ GraphData readGraph(const std::string &filename)
 
   return graph_data;
 }
+
+
 GraphData readGraph_Forward(const std::string &filename)
 {
   int fd = open(filename.c_str(), O_RDONLY);
@@ -142,7 +144,6 @@ GraphData readGraph_Forward(const std::string &filename)
     std::cerr << "Errore apertura file" << std::endl;
     exit(EXIT_FAILURE);
   }
-
   struct stat sb;
   fstat(fd, &sb);
   const char *file_ptr = static_cast<const char *>(mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0));
@@ -172,6 +173,7 @@ GraphData readGraph_Forward(const std::string &filename)
   const bool e_w = (fmt & 1);
   const bool v_w = (fmt & 2);
 
+  
   // reserve vettori
   graph_data.num_v = num_v;
   graph_data.offsets.reserve(num_v + 1);

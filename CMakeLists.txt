@@ -26,7 +26,7 @@ set(COMMON_SOURCES
   ${PROJECT_SOURCE_DIR}/Libs/GraphReader.cu
   ${PROJECT_SOURCE_DIR}/Libs/ChronoCuda.cu
   ${PROJECT_SOURCE_DIR}/Libs/CudaUtilities.cu
-  
+  ${PROJECT_SOURCE_DIR}/Libs/GraphStats.cu
   ${PROJECT_SOURCE_DIR}/Libs/TileReader.cu
   
 )
