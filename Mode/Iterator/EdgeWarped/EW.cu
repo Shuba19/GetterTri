@@ -7,8 +7,6 @@
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-#define HELP_MERGE_PATH 100
-#define HELP_BIN_SEARCH 100
 
 #define CHECK(call)                                                         \
     {                                                                       \
@@ -234,11 +232,12 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                 has_work = true;
                 int long_len = le - ls;
                 int short_len = se - ss;
+                int N = long_len + short_len;
                 O_bin_search = (short_len)*__log2f(long_len);
-                O_merge_path = __log10f(long_len) + (short_len + long_len);
+                O_merge_path = __log10f(N) + (N);
                 merge_path = O_merge_path < O_bin_search;
                 int num_rep = merge_path ? O_bin_search : O_merge_path;
-                is_heavy = num_rep > 1000;
+                is_heavy = false;
             }
         }
     }
@@ -269,7 +268,6 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         has_work = false;
     }
     // coop
-    __syncwarp();
     uint32_t heavy_mask = warp.ballot(has_work && is_heavy);
 
     while (heavy_mask > 0)
@@ -280,16 +278,22 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         int shared_se = warp.shfl(se, leader);
         int shared_ls = warp.shfl(ls, leader);
         int shared_le = warp.shfl(le, leader);
+        bool shared_merge_path = warp.shfl(merge_path, leader);
 
         int short_len = shared_se - shared_ss;
-        for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
-            n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
-
+        if (shared_merge_path)
+        {
+            for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
+                n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
+        }
+        else
+            for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
+                n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
         heavy_mask &= ~(1u << leader);
         if (lane == leader)
             has_work = false;
     }
-    
+
     n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
     n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
     n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
