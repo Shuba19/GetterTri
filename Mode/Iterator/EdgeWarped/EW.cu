@@ -7,7 +7,10 @@
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-#define WORK_LOAD_HEAVY 0
+#define WORK_LOAD_HEAVY 10.0f
+#define LIGHT_MODE false
+#define ONLY_BINARY false
+
 #define CHECK(call)                                                         \
     {                                                                       \
         const cudaError_t error = call;                                     \
@@ -28,12 +31,14 @@ __device__ __forceinline__ bool bin_search(const int *__restrict__ csr, int s, i
     {
         int m = s + ((e - s) >> 1);
         int v = __ldg(&csr[m]);
-        if (v == key) return true;
+        if (v == key)
+            return true;
         s = (v < key) ? m + 1 : s;
-        e = (v < key) ? e     : m;
+        e = (v < key) ? e : m;
     }
     return false;
 }
+
 __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key)
 {
     int l = s, r = e;
@@ -114,13 +119,6 @@ int main(int argc, char *argv[])
     graph_device g_graph;
     load_graph(graph_data, g_graph);
     output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
-
-    int coutn = 0;
-    int soglia = 100;
-    for (int i = 0; i < graph_data.num_v; ++i)
-        if (graph_data.offsets[i + 1] - graph_data.offsets[i] > soglia)
-            coutn++;
-    std::cout << "Numero di nodi con grado > " << soglia << ": " << coutn << std::endl;
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
@@ -221,7 +219,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                     ls = u_s;
                     le = u_e;
                 }
-                double O_bin_search, O_merge_path;
+                float O_bin_search, O_merge_path;
                 has_work = true;
                 int long_len = le - ls;
                 int short_len = se - ss;
@@ -230,8 +228,8 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                 O_merge_path = __log10f(N) + (N);
                 merge_path = O_merge_path < O_bin_search;
                 int num_rep = merge_path ? O_bin_search : O_merge_path;
-                int warp_rep = num_rep / COOP_SIZE;
-                is_heavy = warp_rep > work_load_heavy;
+                float warp_rep = num_rep / COOP_SIZE;
+                is_heavy = warp_rep >= work_load_heavy;
 #if PRINT_INFO
                 if (is_heavy)
                     printf("Edge (%d, %d) has long_len = %d, short_len = %d, O_bin_search = %f, O_merge_path = %f\n", u, v, long_len, short_len, O_bin_search, O_merge_path);
@@ -239,6 +237,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
             }
         }
     }
+#if LIGHT_MODE
     // se light, svolge lavoro
     if (has_work && !is_heavy)
     {
@@ -265,6 +264,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         }
         has_work = false;
     }
+#endif
     // coop
     uint32_t heavy_mask = warp.ballot(has_work && is_heavy);
 
@@ -279,21 +279,55 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         bool shared_merge_path = warp.shfl(merge_path, leader);
 
         int short_len = shared_se - shared_ss;
-        /*
+#if !ONLY_BINARY
         if (shared_merge_path)
         {
-            for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
-                n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
+            int short_len = shared_se - shared_ss;
+            int chunk = (short_len + COOP_SIZE - 1) / COOP_SIZE;
+            int i = shared_ss + lane * chunk;
+            int i_end = min(i + chunk, shared_se);
+
+            if (i < shared_se)
+            {
+                int key = __ldg(&csr[i]);
+                int lo = shared_ls, hi = shared_le;
+                while (lo < hi)
+                {
+                    int mid = lo + ((hi - lo) >> 1);
+                    if (__ldg(&csr[mid]) < key)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                int j = lo;
+
+                int a = key;
+                int b = (j < shared_le) ? __ldg(&csr[j]) : INT_MAX;
+
+                while (i < i_end & j < shared_le)
+                {
+                    bool adv_i = (a <= b);
+                    bool adv_j = (a >= b);
+                    n_tri += (a == b);
+                    i += adv_i;
+                    j += adv_j;
+                    a = adv_i & (i < i_end) ? __ldg(&csr[i]) : a;
+                    b = adv_j & (j < shared_le) ? __ldg(&csr[j]) : b;
+                }
+            }
         }
         else
             for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
                 n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
-                */
+
+#else
 
 #pragma unroll
         for (int i = shared_ss + lane; i < shared_se; i += COOP_SIZE)
             n_tri += bin_search(csr, shared_ls, shared_le, __ldg(&csr[i]));
+#endif
         heavy_mask &= ~(1u << leader);
+
         if (lane == leader)
             has_work = false;
     }
@@ -307,6 +341,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
     if ((threadIdx.x & 31) == 0)
         atomicAdd(results, n_tri);
 }
+
 output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads)
 {
     cudaSetDevice(0);
@@ -322,7 +357,8 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    int work_load_heavy = (int)(50.0f / (5.0f * (1.0f - 1.0f / COOP_SIZE) * log2f(graph_data.num_v/graph_data.num_edge)));;
+    int work_load_heavy = (int)(50.0f / (5.0f * (1.0f - 1.0f / COOP_SIZE) * log2f(graph_data.num_v / graph_data.num_edge)));
+    ;
     edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, work_load_heavy);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
