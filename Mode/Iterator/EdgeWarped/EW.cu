@@ -8,7 +8,9 @@
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
 #define WORK_LOAD_HEAVY 10.0f
-#define LIGHT_MODE false
+#define THRESHOLD_DEGREE 1000
+#define THRESHOLD_DEGREE_HEAVY 10000
+#define LIGHT_MODE true
 #define ONLY_BINARY false
 
 #define CHECK(call)                                                         \
@@ -53,7 +55,7 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
     return l;
 }
 
-output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads);
+output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy );
 float degree_order(GraphData &graph_data);
 int get_device_memory()
 {
@@ -102,6 +104,13 @@ int main(int argc, char *argv[])
     GraphData graph_data = readGraph(argv[1]);
     data_timer.cc_stop(false);
     float preprocess_time = degree_order(graph_data);
+    int counter = 0;
+    for(int i = 0; i< graph_data.num_v; ++i)
+    {
+        int deg = graph_data.offsets[i+1] - graph_data.offsets[i];
+        if(deg > THRESHOLD_DEGREE)
+            counter++;
+    }
 
     output_t output;
 
@@ -118,7 +127,7 @@ int main(int argc, char *argv[])
     int threshold = 10;
     graph_device g_graph;
     load_graph(graph_data, g_graph);
-    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
+    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE, counter > THRESHOLD_DEGREE_HEAVY);
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
@@ -182,7 +191,7 @@ float degree_order(GraphData &graph_data)
 
 // Default Kernel for edge iterator
 __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge,
-                                unsigned long long *__restrict__ results, int work_load_heavy)
+                                unsigned long long *__restrict__ results, bool is_heavy_graph)
 {
     cg::thread_block_tile<COOP_SIZE> warp = cg::tiled_partition<COOP_SIZE>(cg::this_thread_block());
     int lane = warp.thread_rank();
@@ -229,17 +238,12 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                 merge_path = O_merge_path < O_bin_search;
                 int num_rep = merge_path ? O_bin_search : O_merge_path;
                 float warp_rep = num_rep / COOP_SIZE;
-                is_heavy = warp_rep >= work_load_heavy;
-#if PRINT_INFO
-                if (is_heavy)
-                    printf("Edge (%d, %d) has long_len = %d, short_len = %d, O_bin_search = %f, O_merge_path = %f\n", u, v, long_len, short_len, O_bin_search, O_merge_path);
-#endif
             }
         }
     }
 #if LIGHT_MODE
     // se light, svolge lavoro
-    if (has_work && !is_heavy)
+    if (has_work )
     {
         if (merge_path)
         {
@@ -357,9 +361,7 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    int work_load_heavy = (int)(50.0f / (5.0f * (1.0f - 1.0f / COOP_SIZE) * log2f(graph_data.num_v / graph_data.num_edge)));
-    ;
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, work_load_heavy);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, WORK_LOAD_HEAVY);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());
@@ -372,105 +374,3 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     output.time_per_threshold[threshold][128] = timer.elapsed;
     return output;
 }
-
-/*
-
-
-__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold)
-{
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    int n_tri = 0;
-    // thread_block block = cg::this_thread_block();
-    // auto warp_coop = cg::tiled_partition(block, 32);
-    int n_rip = 0;
-    bool use_merge = false;int long_len = 0, short_len = 0;
-    if (id < num_e)
-    {
-
-        int s_node = __ldg(&s_edge[id]);
-        int d_node = __ldg(&csr[id]);
-        if (s_node <= d_node)
-        {
-            int s1 = ofs[s_node], e1 = ofs[s_node + 1];
-            int s2 = ofs[d_node], e2 = ofs[d_node + 1];
-
-            if (s1 < e1 && s2 < e2)
-            {
-                s1 = upper_bound(csr, s1, e1, d_node);
-                s2 = upper_bound(csr, s2, e2, d_node);
-
-                int len1 = e1 - s1;
-                int len2 = e2 - s2;
-
-                int ss, se, ls, le;
-                if (len1 <= len2)
-                {
-                    ss = s1;
-                    se = e1;
-                    ls = s2;
-                    le = e2;
-                }
-                else
-                {
-                    ss = s2;
-                    se = e2;
-                    ls = s1;
-                    le = e1;
-                }
-
-                 long_len = le - ls;
-                 short_len = se - ss;
-
-                if (short_len > 0 && long_len > 0)
-                {
-                    bool use_merge_path  = long_len <= short_len * 10;
-                    int rip = 0;
-
-                    if (long_len <= short_len * 10)
-                    {
-                        int i = ss, j = ls;
-                        int a = __ldg(&csr[i]);
-                        int b = __ldg(&csr[j]);
-
-                        while (i < se && j < le)
-                        {
-                            int next_i = i + (a <= b);
-                            int next_j = j + (a >= b);
-
-                            int next_a = (next_i < se) ? __ldg(&csr[next_i]) : INT_MAX;
-                            int next_b = (next_j < le) ? __ldg(&csr[next_j]) : INT_MAX;
-
-                            n_tri += (a == b);
-                            i = next_i;
-                            j = next_j;
-                            a = next_a;
-                            b = next_b;
-                        }
-                    }
-                    else
-                    {
-                        for (int i = ss; i < se; ++i)
-                        {
-                            n_tri += bin_search(csr, ls, le, csr[i]);
-                        }
-                    }
-                }
-                // Il thread è libero, può comunicare con il warp, per aiutare a contare i triangoli degli altri thread del warp, e alleggerire il lavoro dei thread
-
-                //cerca se esistono thread attivi
-
-                //eventualeme
-
-            }
-        }
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 16);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 8);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 4);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 2);
-        n_tri += __shfl_down_sync(0xffffffff, n_tri, 1);
-    }
-    if ((threadIdx.x & 31) == 0)
-        atomicAdd(results, n_tri);
-}
-
-*/
