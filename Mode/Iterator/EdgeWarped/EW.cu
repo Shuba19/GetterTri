@@ -207,7 +207,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         int u = __ldg(&s_edge[id]);
         int v = __ldg(&csr[id]);
 
-        if (u < v)
+        if (u > v)
         {
             int u_s = ofs[u], u_e = ofs[u + 1];
             int v_s = ofs[v], v_e = ofs[v + 1];

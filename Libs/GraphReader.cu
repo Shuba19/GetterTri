@@ -219,7 +219,7 @@ GraphData readGraph_Forward(const std::string &filename)
         skip_whitespace(p);
         quick_atoi(p);
       }
-      if (dst > src)
+      if (dst < src)
       {
         graph_data.csr.push_back(dst);
         graph_data.s_edge.push_back(src);
