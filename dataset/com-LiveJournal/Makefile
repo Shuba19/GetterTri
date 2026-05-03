@@ -10,4 +10,4 @@ $(GRAPH_BZ2):
 
 $(GRAPH): $(GRAPH_BZ2)
 	gzip -dk $(GRAPH_BZ2)
-	python3 ../conv_snap_to_metis $(GRAPH) $(GRAPHNAME).graph
+	../conv_snap_to_metis.o $(GRAPH) $(GRAPHNAME).graph

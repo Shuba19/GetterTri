@@ -125,55 +125,6 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-float degree_order(GraphData &graph_data)
-{
-    chrono_cuda timer("Degree Ordering");
-    timer.cc_start();
-    int n = graph_data.num_v;
-
-    std::vector<std::pair<int, int>> degree_vertex(n);
-    for (int i = 0; i < n; ++i)
-        degree_vertex[i] = {graph_data.offsets[i + 1] - graph_data.offsets[i], i};
-    std::sort(degree_vertex.begin(), degree_vertex.end());
-
-    std::vector<int> new_id(n);
-    for (int i = 0; i < n; ++i)
-        new_id[degree_vertex[i].second] = i;
-
-    std::vector<int> new_csr;
-    std::vector<int> new_s_edge;
-    std::vector<int> new_offsets(n + 1, 0);
-
-    new_csr.reserve(graph_data.num_edge / 2);
-    new_s_edge.reserve(graph_data.num_edge / 2);
-
-    for (int new_src = 0; new_src < n; ++new_src)
-    {
-        int old_src = degree_vertex[new_src].second;
-        int old_start = graph_data.offsets[old_src];
-        int old_end = graph_data.offsets[old_src + 1];
-        int start_idx = static_cast<int>(new_csr.size());
-
-        for (int j = old_start; j < old_end; ++j)
-        {
-            int new_neighbor = new_id[graph_data.csr[j]];
-            if (new_neighbor > new_src)
-            {
-                new_csr.push_back(new_neighbor);
-                new_s_edge.push_back(new_src);
-            }
-        }
-        std::sort(new_csr.begin() + start_idx, new_csr.end());
-        new_offsets[new_src + 1] = static_cast<int>(new_csr.size());
-    }
-    graph_data.offsets = std::move(new_offsets);
-    graph_data.csr = std::move(new_csr);
-    graph_data.s_edge = std::move(new_s_edge);
-    graph_data.num_edge = graph_data.csr.size();
-    timer.cc_stop(false);
-    return timer.elapsed;
-}
-
 // Default Kernel for edge iterator
 __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, int *__restrict__ results, int threshold, bool unbalanced)
 {
@@ -189,7 +140,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
 
         int s_node = __ldg(&s_edge[id]);
         int d_node = __ldg(&csr[id]);
-        if (s_node <= d_node)
+        if (s_node >= d_node)
         {
             int s1 = ofs[s_node], e1 = ofs[s_node + 1];
             int s2 = ofs[d_node], e2 = ofs[d_node + 1];

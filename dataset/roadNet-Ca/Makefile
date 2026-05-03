@@ -1,5 +1,5 @@
 
-GRAPHNAME = road_Net-CA
+GRAPHNAME = roadNet-CA
 GRAPH = $(GRAPHNAME).txt
 GRAPH_BZ2 = $(GRAPH).gz
 GRAPH_URL = https://snap.stanford.edu/data/roadNet-CA.txt.gz
@@ -10,4 +10,4 @@ $(GRAPH_BZ2):
 
 $(GRAPH): $(GRAPH_BZ2)
 	gzip -dk $(GRAPH_BZ2)
-	python3 ../conv_snap_to_metis $(GRAPH) $(GRAPHNAME).graph
+	../conv_snap_to_metis.o $(GRAPH) $(GRAPHNAME).graph
