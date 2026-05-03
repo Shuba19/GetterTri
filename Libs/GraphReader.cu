@@ -259,8 +259,13 @@ void print_output_as_json(const output_t &output)
   {
     name = name.substr(0, last_dot);
   }
+  auto density = (output.num_v > 1) ? (2.0 * output.num_e) / (output.num_v * (output.num_v - 1)) : 0.0;
   std::cout << "{\n";
   std::cout << "  \"file\": \"" << name << "\",\n";
+  std::cout << "  \"num_vertices\": " << output.num_v << ",\n";
+  std::cout << "  \"num_edges\": " << output.num_e << ",\n";
+  std::cout << "  \"density\": " << density << ",\n";
+
   std::cout << "  \"triangles\": " << output.triangles << ",\n";
   std::cout << "  \"total_space\": " << output.memory_total << ",\n";
   std::cout << "  \"unit_memory\": \"" << output.unit_memory << "\",\n";

@@ -30,7 +30,8 @@ struct GraphData
 struct output_t
 {
     std::string file;
-    int64_t triangles;
+    int64_t triangles,num_v,num_e;
+    double density;
     int memory_total, memory_peak;
     float total_time, kernel_time, read_time, preprocess_time;
     std::string unit_time, unit_memory;

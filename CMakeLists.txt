@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CudaTriangleCounting LANGUAGES CXX CUDA)
 
+find_package(OpenMP REQUIRED)
+
 # Gunrock-style defaults: explicit CUDA arch and release build.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -20,7 +22,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 option(BUILD_ITERATOR_MODES "Build iterator-based modes" ON)
-option(BUILD_TENSOR_CORE_MODES "Build tensor-core modes" ON)
+option(BUILD_TENSOR_CORE_MODES "Build tensor-core modes" OFF)
 
 set(COMMON_SOURCES
   ${PROJECT_SOURCE_DIR}/Libs/GraphReader.cu
@@ -28,7 +30,6 @@ set(COMMON_SOURCES
   ${PROJECT_SOURCE_DIR}/Libs/CudaUtilities.cu
   ${PROJECT_SOURCE_DIR}/Libs/GraphStats.cu
   ${PROJECT_SOURCE_DIR}/Libs/TileReader.cu
-  
 )
 
 set(TENSOR_COMMON_SOURCES
@@ -49,6 +50,11 @@ function(add_triangle_target target_name main_source)
   target_include_directories(${target_name}
     PRIVATE
       ${PROJECT_SOURCE_DIR}/Libs
+  )
+
+  target_link_libraries(${target_name}
+    PRIVATE
+      OpenMP::OpenMP_CXX
   )
 
   target_compile_options(${target_name}

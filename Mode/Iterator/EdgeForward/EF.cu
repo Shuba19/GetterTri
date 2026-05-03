@@ -94,9 +94,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     data_timer.cc_start();
-    GraphData graph_data = readGraph(argv[1]);
+    GraphData graph_data = readGraph_Forward(argv[1]);
     data_timer.cc_stop(false);
-    float preprocess_time = degree_order(graph_data);
+    float preprocess_time = 0; //(graph_data);
     output_t output;
 
     if (!can_run_on_gpu(graph_data))
@@ -175,7 +175,7 @@ float degree_order(GraphData &graph_data)
 }
 
 // Default Kernel for edge iterator
-__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, unsigned long long *__restrict__ results, int threshold, bool unbalanced)
+__global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge, int *__restrict__ results, int threshold, bool unbalanced)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     int n_tri = 0;

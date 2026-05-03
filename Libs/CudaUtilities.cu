@@ -17,17 +17,17 @@ void load_graph(const GraphData &graph_data, graph_device &g_graph)
 {
     int *d_csr = nullptr, *d_ofs = nullptr, *d_s_edge = nullptr;
     int64_t n_edges = graph_data.num_edge;
-    unsigned long long *d_sum = nullptr;
+    int *d_sum = nullptr;
     size_t s = n_edges * sizeof(int);
     CHECK(cudaMalloc(&d_ofs, graph_data.offsets.size() * sizeof(int)));
     CHECK(cudaMalloc(&d_csr, s));
     CHECK(cudaMalloc(&d_s_edge, s));
-    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CHECK(cudaMalloc(&d_sum, sizeof(int)));
 
     CHECK(cudaMemcpy(d_ofs, graph_data.offsets.data(), graph_data.offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_csr, graph_data.csr.data(), graph_data.csr.size() * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_s_edge, graph_data.s_edge.data(), graph_data.s_edge.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    CHECK(cudaMemset(d_sum, 0, sizeof(int)));
     CHECK(cudaDeviceSynchronize());
     g_graph.num_v = graph_data.num_v;
     g_graph.num_edge = graph_data.num_edge;

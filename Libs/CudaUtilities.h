@@ -11,7 +11,7 @@ struct graph_device
     int num_v;
     int64_t num_edge;
     int *d_ofs, *d_csr, *d_s_edge;
-    unsigned long long *d_sum;
+    int *d_sum;
 };
 
 

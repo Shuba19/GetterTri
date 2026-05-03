@@ -7,9 +7,9 @@
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-#define WORK_LOAD_HEAVY 10.0f
-#define THRESHOLD_DEGREE 1000
-#define THRESHOLD_DEGREE_HEAVY 10000
+#define WORK_LOAD_HEAVY 1000
+#define THRESHOLD_DEGREE 300
+#define THRESHOLD_DEGREE_HEAVY 2000
 #define LIGHT_MODE true
 #define ONLY_BINARY false
 
@@ -55,7 +55,7 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
     return l;
 }
 
-output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy );
+output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy);
 float degree_order(GraphData &graph_data);
 int get_device_memory()
 {
@@ -67,14 +67,7 @@ int get_device_memory()
 std::pair<std::string, float> calculate_space_used(const GraphData &graph_data)
 {
     int64_t tot_spazio = graph_data.num_v * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + graph_data.num_edge * sizeof(int) + sizeof(int64_t);
-    if (tot_spazio < 1024)
-        return {"B", static_cast<float>(tot_spazio)};
-    else if (tot_spazio < 1024 * 1024)
-        return {"KB", tot_spazio / 1024.0f};
-    else if (tot_spazio < 1024 * 1024 * 1024)
-        return {"MB", tot_spazio / (1024.0f * 1024.0f)};
-    else
-        return {"GB", tot_spazio / (1024.0f * 1024.0f * 1024.0f)};
+    return {"MB", static_cast<float>(tot_spazio) / (1024 * 1024)};
 }
 
 bool can_run_on_gpu(const GraphData &g)
@@ -101,17 +94,21 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     data_timer.cc_start();
-    GraphData graph_data = readGraph(argv[1]);
+    GraphData graph_data;
+    if (0)
+        graph_data = readGraph(argv[1]);
+    else
+        graph_data = readGraph_Forward(argv[1]);
     data_timer.cc_stop(false);
-    float preprocess_time = degree_order(graph_data);
+    float preprocess_time = 0; //degree_order(graph_data);
     int counter = 0;
-    for(int i = 0; i< graph_data.num_v; ++i)
+    for (int i = 0; i < graph_data.num_v; ++i)
     {
-        int deg = graph_data.offsets[i+1] - graph_data.offsets[i];
-        if(deg > THRESHOLD_DEGREE)
+        int deg = graph_data.offsets[i + 1] - graph_data.offsets[i];
+        if (deg > THRESHOLD_DEGREE)
             counter++;
     }
-
+    bool is_heavy = counter > THRESHOLD_DEGREE_HEAVY;
     output_t output;
 
     if (!can_run_on_gpu(graph_data))
@@ -127,7 +124,7 @@ int main(int argc, char *argv[])
     int threshold = 10;
     graph_device g_graph;
     load_graph(graph_data, g_graph);
-    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE, counter > THRESHOLD_DEGREE_HEAVY);
+    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE, is_heavy);
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
@@ -136,6 +133,8 @@ int main(int argc, char *argv[])
     output.unit_time = "ms";
     output.preprocess_time = preprocess_time;
     output.read_time = data_timer.elapsed;
+    output.num_v = graph_data.num_v;
+    output.num_e = graph_data.num_edge;
     print_output_as_json(output);
     return 0;
 }
@@ -191,13 +190,14 @@ float degree_order(GraphData &graph_data)
 
 // Default Kernel for edge iterator
 __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge,
-                                unsigned long long *__restrict__ results, bool is_heavy_graph)
+                                int *__restrict__ results, bool is_heavy_graph)
 {
     cg::thread_block_tile<COOP_SIZE> warp = cg::tiled_partition<COOP_SIZE>(cg::this_thread_block());
     int lane = warp.thread_rank();
+    __shared__ int search_node[4][128];
     int64_t id = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-
     int n_tri = 0;
+    int tot_operations = 0;
     int ss = 0, se = 0, ls = 0, le = 0;
     bool has_work = false;
     bool is_heavy = false;
@@ -238,12 +238,19 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
                 merge_path = O_merge_path < O_bin_search;
                 int num_rep = merge_path ? O_bin_search : O_merge_path;
                 float warp_rep = num_rep / COOP_SIZE;
+                tot_operations = num_rep;
             }
         }
     }
+    tot_operations += __shfl_down_sync(0xffffffff, tot_operations, 16);
+    tot_operations += __shfl_down_sync(0xffffffff, tot_operations, 8);
+    tot_operations += __shfl_down_sync(0xffffffff, tot_operations, 4);
+    tot_operations += __shfl_down_sync(0xffffffff, tot_operations, 2);
+    tot_operations += __shfl_down_sync(0xffffffff, tot_operations, 1);
+    is_heavy = (tot_operations > WORK_LOAD_HEAVY);
 #if LIGHT_MODE
     // se light, svolge lavoro
-    if (has_work )
+    if (has_work && !is_heavy)
     {
         if (merge_path)
         {
@@ -346,7 +353,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         atomicAdd(results, n_tri);
 }
 
-output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads)
+output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy)
 {
     cudaSetDevice(0);
     if (graph_data.num_edge == 0)
@@ -361,7 +368,7 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     chrono_cuda timer("Edge Iterator", stream);
     timer.cc_start();
     cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, WORK_LOAD_HEAVY);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, false);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());
