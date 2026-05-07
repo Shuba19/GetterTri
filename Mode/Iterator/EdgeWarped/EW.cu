@@ -3,6 +3,7 @@
 #include "../../../Libs/CudaUtilities.h"
 #include <cooperative_groups.h>
 
+#define PREPROCESSING
 #define TESTING false
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
@@ -95,12 +96,14 @@ int main(int argc, char *argv[])
     }
     data_timer.cc_start();
     GraphData graph_data;
-    if (0)
-        graph_data = readGraph(argv[1]);
-    else
-        graph_data = readGraph_Forward(argv[1]);
+#ifdef PREPROCESSING
+    graph_data = readGraph(argv[1]);
+    float preprocess_time = degree_order(graph_data);
+#else
+    graph_data = readGraph_Forward(argv[1]);
+    float preprocess_time = 0.0f;
+#endif
     data_timer.cc_stop(false);
-    float preprocess_time = 0; //degree_order(graph_data);
     int counter = 0;
     for (int i = 0; i < graph_data.num_v; ++i)
     {
@@ -206,8 +209,11 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
     {
         int u = __ldg(&s_edge[id]);
         int v = __ldg(&csr[id]);
-
+#ifdef PREPROCESSING
+        if (u < v)
+#else
         if (u > v)
+#endif
         {
             int u_s = ofs[u], u_e = ofs[u + 1];
             int v_s = ofs[v], v_e = ofs[v + 1];
