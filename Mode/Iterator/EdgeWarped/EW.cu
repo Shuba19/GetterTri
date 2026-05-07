@@ -7,7 +7,7 @@
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-#define WORK_LOAD_HEAVY 500
+#define WORK_LOAD_HEAVY 300
 #define THRESHOLD_DEGREE 300
 #define THRESHOLD_DEGREE_HEAVY 2000
 #define LIGHT_MODE true
@@ -378,6 +378,6 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     output.memory_total = memory_used;
     output.memory_peak = memory_used;
     output.unit_memory = unit;
-    output.time_per_threshold[threshold][128] = timer.elapsed;
+    output.kernel_time = timer.elapsed;
     return output;
 }

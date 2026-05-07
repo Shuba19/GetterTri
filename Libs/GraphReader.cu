@@ -135,7 +135,6 @@ GraphData readGraph(const std::string &filename)
   return graph_data;
 }
 
-
 GraphData readGraph_Forward(const std::string &filename)
 {
   int fd = open(filename.c_str(), O_RDONLY);
@@ -151,12 +150,12 @@ GraphData readGraph_Forward(const std::string &filename)
 
   GraphData graph_data;
   const char *p = file_ptr;
+  
+  // Skip commenti iniziali
   while (p < end_ptr && *p == '%')
   {
-    while (p < end_ptr && *p != '\n')
-      ++p;
-    if (p < end_ptr)
-      ++p;
+    while (p < end_ptr && *p != '\n') ++p;
+    if (p < end_ptr) ++p;
   }
 
   skip_whitespace(p);
@@ -165,36 +164,32 @@ GraphData readGraph_Forward(const std::string &filename)
   int num_e_meta = quick_atoi(p);
   skip_whitespace(p);
   int fmt = (*p >= '0' && *p <= '9') ? quick_atoi(p) : 0;
-  while (p < end_ptr && *p != '\n')
-    ++p;
-  if (p < end_ptr)
-    ++p;
+  
+  while (p < end_ptr && *p != '\n') ++p;
+  if (p < end_ptr) ++p;
 
   const bool e_w = (fmt & 1);
   const bool v_w = (fmt & 2);
 
-  
-  // reserve vettori
   graph_data.num_v = num_v;
   graph_data.offsets.reserve(num_v + 1);
-  graph_data.csr.reserve(num_e_meta);
+  graph_data.csr.reserve(num_e_meta); 
   graph_data.s_edge.reserve(num_e_meta);
   graph_data.offsets.push_back(0);
-  graph_data.deg.reserve(num_v);
+  
+  std::vector<int> row_neighbors; 
+  row_neighbors.reserve(1024);    
+
   int src = 0;
   while (p < end_ptr && src < num_v)
   {
-    // comment
     if (*p == '%')
     {
-      while (p < end_ptr && *p != '\n')
-        ++p;
-      if (p < end_ptr)
-        ++p;
+      while (p < end_ptr && *p != '\n') ++p;
+      if (p < end_ptr) ++p;
       continue;
     }
 
-    //vertice isolato
     if (*p == '\n')
     {
       graph_data.offsets.push_back(static_cast<int>(graph_data.csr.size()));
@@ -210,6 +205,7 @@ GraphData readGraph_Forward(const std::string &filename)
       skip_whitespace(p);
     }
 
+    row_neighbors.clear(); 
     while (p < end_ptr && *p != '\n')
     {
       int dst = quick_atoi(p) - 1;
@@ -219,17 +215,24 @@ GraphData readGraph_Forward(const std::string &filename)
         skip_whitespace(p);
         quick_atoi(p);
       }
+      
       if (dst < src)
       {
-        graph_data.csr.push_back(dst);
-        graph_data.s_edge.push_back(src);
+        row_neighbors.push_back(dst);
       }
       skip_whitespace(p);
     }
 
+    if (!row_neighbors.empty()) {
+        std::sort(row_neighbors.begin(), row_neighbors.end());
+        for (int neighbor : row_neighbors) {
+            graph_data.csr.push_back(neighbor);
+            graph_data.s_edge.push_back(src);
+        }
+    }
+
     graph_data.offsets.push_back(static_cast<int>(graph_data.csr.size()));
-    if (p < end_ptr)
-      ++p;
+    if (p < end_ptr) ++p;
     ++src;
   }
 
@@ -272,6 +275,7 @@ void print_output_as_json(const output_t &output)
   std::cout << "  \"total_time\": " << output.total_time << ",\n";
   std::cout << "  \"read_time\": " << output.read_time << ",\n";
   std::cout << "  \"preprocess_time\": " << output.preprocess_time << ",\n";
+  std::cout << "  \"kernel_time\": " << output.kernel_time << ",\n";
   std::cout << "  \"unit_time\": \"" << output.unit_time << "\",\n";
   std::cout << "  \"time_per_threshold\": [\n";
   for (auto &entry : output.time_per_threshold)
