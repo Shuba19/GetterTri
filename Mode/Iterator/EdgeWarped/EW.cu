@@ -3,14 +3,11 @@
 #include "../../../Libs/CudaUtilities.h"
 #include <cooperative_groups.h>
 
-#define PREPROCESSING
 #define TESTING false
 #define GRAPH_DEVICE true
 #define BLOCK_SIZE 128
 #define COOP_SIZE 32
-#define WORK_LOAD_HEAVY 300
-#define THRESHOLD_DEGREE 300
-#define THRESHOLD_DEGREE_HEAVY 2000
+#define WORK_LOAD_HEAVY 30000
 #define LIGHT_MODE true
 #define ONLY_BINARY false
 
@@ -26,7 +23,6 @@
     }
 
 using namespace cooperative_groups;
-
 namespace cg = cooperative_groups;
 __device__ __forceinline__ bool bin_search(const int *__restrict__ csr, int s, int e, int key)
 {
@@ -56,8 +52,8 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
     return l;
 }
 
-output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy);
-float degree_order(GraphData &graph_data);
+output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads);
+
 int get_device_memory()
 {
     size_t free_mem, total_mem;
@@ -96,22 +92,10 @@ int main(int argc, char *argv[])
     }
     data_timer.cc_start();
     GraphData graph_data;
-#ifdef PREPROCESSING
-    graph_data = readGraph(argv[1]);
-    float preprocess_time = degree_order(graph_data);
-#else
     graph_data = readGraph_Forward(argv[1]);
     float preprocess_time = 0.0f;
-#endif
+
     data_timer.cc_stop(false);
-    int counter = 0;
-    for (int i = 0; i < graph_data.num_v; ++i)
-    {
-        int deg = graph_data.offsets[i + 1] - graph_data.offsets[i];
-        if (deg > THRESHOLD_DEGREE)
-            counter++;
-    }
-    bool is_heavy = counter > THRESHOLD_DEGREE_HEAVY;
     output_t output;
 
     if (!can_run_on_gpu(graph_data))
@@ -127,7 +111,7 @@ int main(int argc, char *argv[])
     int threshold = 10;
     graph_device g_graph;
     load_graph(graph_data, g_graph);
-    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE, is_heavy);
+    output = SearchTriangle_Edge_Iterator(g_graph, threshold, BLOCK_SIZE);
     free_graph(g_graph);
     timer.cc_stop(false);
     std::string name = argv[1];
@@ -142,58 +126,10 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-float degree_order(GraphData &graph_data)
-{
-    chrono_cuda timer("Degree Ordering");
-    timer.cc_start();
-    int n = graph_data.num_v;
-
-    std::vector<std::pair<int, int>> degree_vertex(n);
-    for (int i = 0; i < n; ++i)
-        degree_vertex[i] = {graph_data.offsets[i + 1] - graph_data.offsets[i], i};
-    std::sort(degree_vertex.begin(), degree_vertex.end());
-
-    std::vector<int> new_id(n);
-    for (int i = 0; i < n; ++i)
-        new_id[degree_vertex[i].second] = i;
-
-    std::vector<int> new_csr;
-    std::vector<int> new_s_edge;
-    std::vector<int> new_offsets(n + 1, 0);
-
-    new_csr.reserve(graph_data.num_edge / 2);
-    new_s_edge.reserve(graph_data.num_edge / 2);
-
-    for (int new_src = 0; new_src < n; ++new_src)
-    {
-        int old_src = degree_vertex[new_src].second;
-        int old_start = graph_data.offsets[old_src];
-        int old_end = graph_data.offsets[old_src + 1];
-        int start_idx = static_cast<int>(new_csr.size());
-
-        for (int j = old_start; j < old_end; ++j)
-        {
-            int new_neighbor = new_id[graph_data.csr[j]];
-            if (new_neighbor > new_src)
-            {
-                new_csr.push_back(new_neighbor);
-                new_s_edge.push_back(new_src);
-            }
-        }
-        std::sort(new_csr.begin() + start_idx, new_csr.end());
-        new_offsets[new_src + 1] = static_cast<int>(new_csr.size());
-    }
-    graph_data.offsets = std::move(new_offsets);
-    graph_data.csr = std::move(new_csr);
-    graph_data.s_edge = std::move(new_s_edge);
-    graph_data.num_edge = graph_data.csr.size();
-    timer.cc_stop(false);
-    return timer.elapsed;
-}
 
 // Default Kernel for edge iterator
 __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict__ ofs, const int *__restrict__ csr, const int *__restrict__ s_edge,
-                                int *__restrict__ results, bool is_heavy_graph)
+                                int *__restrict__ results)
 {
     cg::thread_block_tile<COOP_SIZE> warp = cg::tiled_partition<COOP_SIZE>(cg::this_thread_block());
     int lane = warp.thread_rank();
@@ -359,7 +295,7 @@ __global__ void edge_search_tri(int num_v, int64_t num_e, const int *__restrict_
         atomicAdd(results, n_tri);
 }
 
-output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads, bool is_heavy)
+output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, int num_threads)
 {
     cudaSetDevice(0);
     if (graph_data.num_edge == 0)
@@ -368,13 +304,16 @@ output_t SearchTriangle_Edge_Iterator(graph_device graph_data, int threshold, in
     int64_t tri_count = 0;
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
+
+    chrono_cuda timer("Edge Iterator", stream);
+    timer.cc_start();
+
+    cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
+
     int64_t n_blocks = (graph_data.num_edge + num_threads - 1) / num_threads;
     dim3 blockDim(num_threads);
     dim3 gridDim(n_blocks);
-    chrono_cuda timer("Edge Iterator", stream);
-    timer.cc_start();
-    cudaFuncSetCacheConfig(edge_search_tri, cudaFuncCachePreferL1);
-    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum, false);
+    edge_search_tri<<<gridDim, blockDim, 0, stream>>>(graph_data.num_v, graph_data.num_edge, graph_data.d_ofs, graph_data.d_csr, graph_data.d_s_edge, graph_data.d_sum);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpyAsync(&tri_count, graph_data.d_sum, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CHECK(cudaGetLastError());

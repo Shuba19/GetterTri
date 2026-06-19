@@ -68,7 +68,6 @@ endfunction()
 
 if(BUILD_ITERATOR_MODES)
   add_triangle_target(e "${PROJECT_SOURCE_DIR}/Mode/Iterator/Edge/E.cu")
-  add_triangle_target(ef "${PROJECT_SOURCE_DIR}/Mode/Iterator/EdgeForward/EF.cu")
   add_triangle_target(ew "${PROJECT_SOURCE_DIR}/Mode/Iterator/EdgeWarped/EW.cu")
   add_triangle_target(n "${PROJECT_SOURCE_DIR}/Mode/Iterator/Node/N.cu")
 endif()

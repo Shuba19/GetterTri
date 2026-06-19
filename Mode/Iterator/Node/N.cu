@@ -46,29 +46,35 @@ __device__ __forceinline__ int upper_bound(const int *csr, int s, int e, int key
     return l;
 }
 __global__ void static d_search_tri(int num_v, int *ofs, int *csr, int *results);
-int SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr);
+output_t SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr);
 int main(int argc, char *argv[])
 {
-    auto t1 = std::chrono::high_resolution_clock::now();
     if (argv[1] == nullptr)
     {
         std::cerr << "Error: No input file provided. Please provide a graph file as an argument." << std::endl;
         return EXIT_FAILURE;
     }
-    GraphData graph_data = readGraph_Forward(argv[1]);
-    auto t_read = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed_read = t_read - t1;
-    std::cout << "Graph reading time: " << elapsed_read.count() << " ms" << std::endl;
-    int triangles = SearchTriangle_Node_Iterator(graph_data.num_v, graph_data.num_edge, graph_data.offsets, graph_data.csr);
-    std::cout << "Number of triangles: " << triangles << std::endl;
-    auto t2 = std::chrono::high_resolution_clock::now();
+    chrono_cuda timer("Total Time"), read_timer("Read Time");
+    timer.cc_start();
+    read_timer.cc_start();
+    GraphData graph_data = readGraph(argv[1]);
+    read_timer.cc_stop(false);
+    output_t output_t = SearchTriangle_Node_Iterator(graph_data.num_v, graph_data.num_edge, graph_data.offsets, graph_data.csr);
+    timer.cc_stop(false);
+    output_t.file = argv[1];
+    output_t.num_v = graph_data.num_v;
+    output_t.num_e = graph_data.num_edge;
+    output_t.total_time = timer.elapsed;
+    output_t.read_time = read_timer.elapsed;
+    output_t.unit_time = "ms";
+    output_t.unit_memory = "bytes";
+    output_t.memory_total = 0;
+    print_output_as_json(output_t);
     // in milliseconds
-    std::chrono::duration<double, std::milli> elapsed = t2 - t1;
-    std::cout << "Execution time: " << elapsed.count() << " ms" << std::endl;
     return 0;
 }
 
-int SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr)
+output_t SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &offsets, std::vector<int> &csr)
 {
     cudaSetDevice(0);
     dim3 blockDim(128);
@@ -76,12 +82,12 @@ int SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &o
     int64_t csr_size = csr.size();
 
     int *d_csr, *d_ofs, *d_res;
-    d_csr = nullptr; 
+    d_csr = nullptr;
     d_ofs = nullptr;
     d_res = nullptr;
     CHECK(cudaMalloc(&d_ofs, (offsets.size()) * sizeof(int)));
     CHECK(cudaMalloc(&d_csr, csr_size * sizeof(int)));
-    CHECK(cudaMalloc(&d_res, num_v * sizeof(int)));
+    CHECK(cudaMalloc(&d_res, sizeof(int)));
 
     CHECK(cudaMemcpy(d_ofs, offsets.data(), (num_v + 1) * sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_csr, csr.data(), csr_size * sizeof(int), cudaMemcpyHostToDevice));
@@ -97,43 +103,43 @@ int SearchTriangle_Node_Iterator(int num_v, int64_t n_edges, std::vector<int> &o
     dim3 r_blockDim(128);
     dim3 r_gridDim(nr_blocks);
     unsigned long long *d_sum = nullptr;
-
-    CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
-    CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
-
-    reduce_vector<<<r_gridDim, r_blockDim, 0, stream>>>(num_v, d_res, d_sum);
-    cudaDeviceSynchronize();
-    timer.cc_stop();
-    unsigned long long h_sum = 0;
-    CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    timer.cc_stop(false);
+    int h_sum = 0;
+    CHECK(cudaMemcpy(&h_sum, d_res, sizeof(int), cudaMemcpyDeviceToHost));
     n_tri = h_sum;
     CHECK(cudaFree(d_sum));
     CHECK(cudaFree(d_res));
-    return n_tri;
+    output_t output;
+    output.triangles = n_tri/6;
+    output.kernel_time = timer.elapsed;
+    output.preprocess_time = 0;
+    return output;
 }
 
 __global__ void static d_search_tri(int num_v, int *ofs, int *csr, int *results)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
+    int count = 0;
     if (id < num_v)
     {
         int of1, of2;
         of1 = ofs[id];
         of2 = ofs[id + 1];
-        int count = 0;
         for (int i = of1; i < of2; i++)
         {
             int index = csr[i];
-            if (index <= id)
-                continue;
             for (int j = ofs[index]; j < ofs[index + 1]; j++)
             {
                 int pivot = csr[j];
-                if (pivot <= index)
-                    continue;
                 count += bin_search(csr, of1, of2, pivot);
             }
         }
-        results[id] = count;
     }
+    count += __shfl_down_sync(0xffffffff, count, 16);
+    count += __shfl_down_sync(0xffffffff, count, 8);
+    count += __shfl_down_sync(0xffffffff, count, 4);
+    count += __shfl_down_sync(0xffffffff, count, 2);
+    count += __shfl_down_sync(0xffffffff, count, 1);
+    if (threadIdx.x % 32 == 0)
+        atomicAdd(results, count);
 }

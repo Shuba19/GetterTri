@@ -71,6 +71,9 @@ GraphData readGraph(const std::string &filename)
   graph_data.s_edge.reserve(num_e_meta);
   graph_data.offsets.push_back(0);
 
+  std::vector<int> row_neighbors; 
+  row_neighbors.reserve(1024);    
+
   int src = 0;
   while (p < end_ptr && src < num_v)
   {
@@ -109,13 +112,16 @@ GraphData readGraph(const std::string &filename)
         skip_whitespace(p);
         quick_atoi(p);
       }
-
-      graph_data.csr.push_back(dst);
+      row_neighbors.push_back(dst);
       graph_data.s_edge.push_back(src);
 
       skip_whitespace(p);
     }
-
+    std::sort(row_neighbors.begin(), row_neighbors.end());
+    for (int neighbor : row_neighbors)    {
+      graph_data.csr.push_back(neighbor);
+    }
+    row_neighbors.clear();
     graph_data.offsets.push_back(static_cast<int>(graph_data.csr.size()));
     if (p < end_ptr)
       ++p;
@@ -282,14 +288,14 @@ void print_output_as_json(const output_t &output)
   {
     int threshold = entry.first;
     std::cout << "    {\n";
-    std::cout << "      \"threshold\": " << threshold << ",\n";
-    std::cout << "      \"blocks\": [\n";
+    std::cout << "      \"block\": " << threshold << ",\n";
+    std::cout << "      \"thresholds\": [\n";
     for (auto &block_entry : entry.second)
     {
       int block_size = block_entry.first;
       float time = block_entry.second;
       std::cout << "        {";
-      std::cout << "\"block_size\": " << block_size << ",";
+      std::cout << "\"threshold_size\": " << block_size << ",";
       std::cout << "\"time\": " << time;
       std::cout << "}";
       if (block_entry != *entry.second.rbegin())
